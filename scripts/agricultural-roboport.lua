@@ -83,8 +83,12 @@ function seed(roboport, seed_logistic_only)
         end
     end
 
+    local max_seeds = settings.global["agricultural-roboport-max-seeds-per-tick"] and settings.global["agricultural-roboport-max-seeds-per-tick"].value or 10
+    local placed = 0
+
     for x = math.ceil(roboport.position.x - radius + 2), math.floor(roboport.position.x + radius - 2), step do
         for y = math.ceil(roboport.position.y - radius + 2), math.floor(roboport.position.y + radius - 2), step do
+            if placed >= max_seeds then return end
             local pos = {x = x, y = y}
             local entities = surface.count_entities_filtered{
                 area = {{pos.x - 1.4, pos.y - 1.4}, {pos.x + 1.4, pos.y + 1.4}},
@@ -160,10 +164,9 @@ function seed(roboport, seed_logistic_only)
                                 ghost_name = virtual_seed_name,
                                 raise_built = true,
                             }
+                            placed = placed + 1
                             break -- Only plant one seed per tile
                         end
-                    else
-                        -- write_file_log("[seed] skipping seed: " .. tostring(seed_name) .. " (no plant or virtual entity)")
                     end
                 end
             end
