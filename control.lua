@@ -10,10 +10,18 @@ helpers = helpers or {}
 require("scripts.agricultural-roboport")
 require("scripts.UI")
 
--- Metatable for default mode
+-- Metatable for default roboport settings (unified table)
 local roboport_modes_mt = {
     __index = function()
-        return 0 -- default to harvest and seed
+        return {
+            mode = 0, -- default to harvest and seed
+            seed_logistic_only = false,
+            use_filter = false,
+            filter_invert = false,
+            filters = nil,
+            surface = nil, -- new: surface name
+            position = nil -- new: position table {x=..., y=...}
+        }
     end
 }
 
@@ -55,13 +63,22 @@ end)
 
 local function on_built_agricultural_roboport(entity)
     local ghost_key = string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
-    local ghost_mode = storage.agricultural_roboports[ghost_key]
-    if ghost_mode ~= nil then
-        storage.agricultural_roboports[entity.unit_number] = ghost_mode
+    local ghost_settings = storage.agricultural_roboports[ghost_key]
+    if ghost_settings ~= nil then
+        ghost_settings.surface = entity.surface.name
+        ghost_settings.position = {x = entity.position.x, y = entity.position.y}
+        storage.agricultural_roboports[entity.unit_number] = ghost_settings
         storage.agricultural_roboports[ghost_key] = nil
     else
-        storage.agricultural_roboports[entity.unit_number] = 0 -- default mode
-        storage.agricultural_roboports[tostring(entity.unit_number).."_seed_logistic_only"] = false -- ensure boolean default
+        storage.agricultural_roboports[entity.unit_number] = {
+            mode = 0,
+            seed_logistic_only = false,
+            use_filter = false,
+            filter_invert = false,
+            filters = nil,
+            surface = entity.surface.name,
+            position = {x = entity.position.x, y = entity.position.y},
+        }
     end
 end
 
@@ -188,23 +205,20 @@ local function on_built_virtual_seed_ghost(entity, event)
 end
 
 local function copy_roboport_settings(source_key, dest_key)
-    -- Copy mode and seed_logistic_only (legacy)
-    storage.agricultural_roboports[dest_key] = storage.agricultural_roboports[source_key] or 0
-    local s = storage.agricultural_roboports[tostring(source_key).."_seed_logistic_only"]
-    if s == nil or s == 0 then s = false end
-    storage.agricultural_roboports[tostring(dest_key).."_seed_logistic_only"] = s
-    -- Copy new filter settings
-    storage.agricultural_roboports[tostring(dest_key).."_use_filter"] = storage.agricultural_roboports[tostring(source_key).."_use_filter"] or false
-    storage.agricultural_roboports[tostring(dest_key).."_filter_invert"] = storage.agricultural_roboports[tostring(source_key).."_filter_invert"] or false
-    local filters = storage.agricultural_roboports[tostring(source_key).."_filters"]
-    if type(filters) == "table" then
-        -- Deep copy to avoid reference issues
+    local src = storage.agricultural_roboports[source_key] or {}
+    local dest = {}
+    dest.mode = src.mode or 0
+    dest.seed_logistic_only = src.seed_logistic_only or false
+    dest.use_filter = src.use_filter or false
+    dest.filter_invert = src.filter_invert or false
+    if type(src.filters) == "table" then
         local new_filters = {}
-        for i = 1, 5 do new_filters[i] = filters[i] end
-        storage.agricultural_roboports[tostring(dest_key).."_filters"] = new_filters
+        for i = 1, 5 do new_filters[i] = src.filters[i] end
+        dest.filters = new_filters
     else
-        storage.agricultural_roboports[tostring(dest_key).."_filters"] = nil
+        dest.filters = nil
     end
+    storage.agricultural_roboports[dest_key] = dest
 end
 
 function on_built_event_handler(event)
@@ -213,45 +227,47 @@ function on_built_event_handler(event)
     if entity.name == "entity-ghost" and entity.ghost_name == "agricultural-roboport" then
         if entity.tags then
             local ghost_key = string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
-            storage.agricultural_roboports[ghost_key] = entity.tags.mode or 0
-            local s = entity.tags.seed_logistic_only
-            if s == nil or s == 0 then s = false end
-            storage.agricultural_roboports[tostring(ghost_key).."_seed_logistic_only"] = s
-            storage.agricultural_roboports[tostring(ghost_key).."_use_filter"] = entity.tags.use_filter or false
-            storage.agricultural_roboports[tostring(ghost_key).."_filter_invert"] = entity.tags.filter_invert or false
-            if type(entity.tags.filters) == "table" then
-                local new_filters = {}
-                for i = 1, 5 do new_filters[i] = entity.tags.filters[i] end
-                storage.agricultural_roboports[tostring(ghost_key).."_filters"] = new_filters
-            else
-                storage.agricultural_roboports[tostring(ghost_key).."_filters"] = nil
-            end
+            storage.agricultural_roboports[ghost_key] = {
+                mode = entity.tags.mode or 0,
+                seed_logistic_only = entity.tags.seed_logistic_only or false,
+                use_filter = entity.tags.use_filter or false,
+                filter_invert = entity.tags.filter_invert or false,
+                filters = (type(entity.tags.filters) == "table" and (function() local f = {}; for i=1,5 do f[i]=entity.tags.filters[i] end; return f end)()) or nil,
+                surface = entity.surface.name,
+                position = {x = entity.position.x, y = entity.position.y},
+            }
         end
         return
     end
     if entity.name == "agricultural-roboport" then
         if event.tags then
-            storage.agricultural_roboports[entity.unit_number] = event.tags.mode or 0
-            local s = event.tags.seed_logistic_only
-            if s == nil or s == 0 then s = false end
-            storage.agricultural_roboports[tostring(entity.unit_number).."_seed_logistic_only"] = s
-            storage.agricultural_roboports[tostring(entity.unit_number).."_use_filter"] = event.tags.use_filter or false
-            storage.agricultural_roboports[tostring(entity.unit_number).."_filter_invert"] = event.tags.filter_invert or false
-            if type(event.tags.filters) == "table" then
-                local new_filters = {}
-                for i = 1, 5 do new_filters[i] = event.tags.filters[i] end
-                storage.agricultural_roboports[tostring(entity.unit_number).."_filters"] = new_filters
-            else
-                storage.agricultural_roboports[tostring(entity.unit_number).."_filters"] = nil
-            end
+            storage.agricultural_roboports[entity.unit_number] = {
+                mode = event.tags.mode or 0,
+                seed_logistic_only = event.tags.seed_logistic_only or false,
+                use_filter = event.tags.use_filter or false,
+                filter_invert = event.tags.filter_invert or false,
+                filters = (type(event.tags.filters) == "table" and (function() local f = {}; for i=1,5 do f[i]=event.tags.filters[i] end; return f end)()) or nil,
+                surface = entity.surface.name,
+                position = {x = entity.position.x, y = entity.position.y},
+            }
         else
             local ghost_key = string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
-            local ghost_mode = storage.agricultural_roboports[ghost_key]
-            if ghost_mode ~= nil then
-                copy_roboport_settings(ghost_key, entity.unit_number)
+            local ghost_settings = storage.agricultural_roboports[ghost_key]
+            if ghost_settings ~= nil then
+                ghost_settings.surface = entity.surface.name
+                ghost_settings.position = {x = entity.position.x, y = entity.position.y}
+                storage.agricultural_roboports[entity.unit_number] = ghost_settings
                 storage.agricultural_roboports[ghost_key] = nil
             else
-                storage.agricultural_roboports[entity.unit_number] = 0
+                storage.agricultural_roboports[entity.unit_number] = {
+                    mode = 0,
+                    seed_logistic_only = false,
+                    use_filter = false,
+                    filter_invert = false,
+                    filters = nil,
+                    surface = entity.surface.name,
+                    position = {x = entity.position.x, y = entity.position.y},
+                }
             end
         end
         return
@@ -262,10 +278,13 @@ function on_built_event_handler(event)
     end
     if event.tags and (entity.name == "entity-ghost" and entity.ghost_name == "agricultural-roboport" or entity.name == "agricultural-roboport") then
         local key = entity.name == "agricultural-roboport" and entity.unit_number or string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
-        storage.agricultural_roboports[key] = event.tags.mode or 0
-        local s = event.tags.seed_logistic_only
-        if s == nil or s == 0 then s = false end
-        storage.agricultural_roboports[tostring(key).."_seed_logistic_only"] = s
+        storage.agricultural_roboports[key] = {
+            mode = event.tags.mode or 0,
+            seed_logistic_only = event.tags.seed_logistic_only or false,
+            use_filter = event.tags.use_filter or false,
+            filter_invert = event.tags.filter_invert or false,
+            filters = (type(event.tags.filters) == "table" and (function() local f = {}; for i=1,5 do f[i]=event.tags.filters[i] end; return f end)()) or nil,
+        }
     end
 end
 
@@ -319,22 +338,16 @@ local function on_player_setup_blueprint(event)
             local surface = player.surface
             local real = surface.find_entity("agricultural-roboport", ent.position)
             if real then
-                local key = real.unit_number
-                local mode = storage.agricultural_roboports[key] or 0
-                local seed_logistic_only = storage.agricultural_roboports[tostring(key).."_seed_logistic_only"]
-                if seed_logistic_only == nil or seed_logistic_only == 0 then seed_logistic_only = false end
-                local use_filter = storage.agricultural_roboports[tostring(key).."_use_filter"] or false
-                local filter_invert = storage.agricultural_roboports[tostring(key).."_filter_invert"] or false
-                local filters = storage.agricultural_roboports[tostring(key).."_filters"]
+                local settings = storage.agricultural_roboports[real.unit_number] or {}
                 local tags = {
-                    mode = mode,
-                    seed_logistic_only = seed_logistic_only,
-                    use_filter = use_filter,
-                    filter_invert = filter_invert,
+                    mode = settings.mode or 0,
+                    seed_logistic_only = settings.seed_logistic_only or false,
+                    use_filter = settings.use_filter or false,
+                    filter_invert = settings.filter_invert or false,
                 }
-                if type(filters) == "table" then
+                if type(settings.filters) == "table" then
                     tags.filters = {}
-                    for j = 1, 5 do tags.filters[j] = filters[j] end
+                    for j = 1, 5 do tags.filters[j] = settings.filters[j] end
                 end
                 bp.set_blueprint_entity_tags(i, tags)
             end
@@ -360,8 +373,9 @@ local function process_agricultural_roboport(entity, tick)
     if entity.to_be_deconstructed() then
         return
     end
-    local mode = storage.agricultural_roboports[entity.unit_number] -- metatable defaults to 0
-    local seed_logistic_only = storage.agricultural_roboports[tostring(entity.unit_number).."_seed_logistic_only"] or false
+    local settings = storage.agricultural_roboports[entity.unit_number] or {}
+    local mode = settings.mode or 0
+    local seed_logistic_only = settings.seed_logistic_only or false
     if entity.status == defines.entity_status.working then
         entity.custom_status = {diode = defines.entity_status_diode.green, label = get_operating_mode_name and get_operating_mode_name(mode) or ""}
     end
@@ -378,14 +392,20 @@ end
 -- =====================
 
 script.on_nth_tick(300, function(event)
-    for _, surface in pairs(game.surfaces or {}) do
-        local roboports = surface.find_entities_filtered{type = "roboport", name = "agricultural-roboport"}
-        for _, entity in pairs(roboports) do
-            if entity and entity.valid and entity.type == "roboport" and entity.name == "agricultural-roboport" then
-                process_agricultural_roboport(entity, event.tick)
+    local count = 0
+    for key, settings in pairs(storage.agricultural_roboports) do
+        if type(key) == "number" and settings.surface and settings.position then
+            local surface = game.surfaces[settings.surface]
+            if surface then
+                local entity = surface.find_entity("agricultural-roboport", settings.position)
+                if entity and entity.valid and entity.unit_number == key then
+                    process_agricultural_roboport(entity, event.tick)
+                    count = count + 1
+                end
             end
         end
     end
+    write_file_log("[agroport nth_tick] processed="..tostring(count))
 end)
 
 script.on_event(defines.events.on_built_entity, on_built_event_handler, {{filter = "name", mode="or", name = "entity-ghost"}, {filter = "name", mode="or", name = "agricultural-roboport"}})

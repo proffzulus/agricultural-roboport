@@ -64,10 +64,11 @@ function seed(roboport, seed_logistic_only)
     end
     local step = 3
 
-    local filters = storage.agricultural_roboports[tostring(roboport.unit_number).."_filters"]
+    local settings = storage.agricultural_roboports[roboport.unit_number] or {}
+    local filters = settings.filters or {}
     if type(filters) ~= "table" then filters = {} end
-    local use_filter = storage.agricultural_roboports[tostring(roboport.unit_number).."_use_filter"]
-    local filter_invert = storage.agricultural_roboports[tostring(roboport.unit_number).."_filter_invert"]
+    local use_filter = settings.use_filter
+    local filter_invert = settings.filter_invert
 
     local whitelist = {}
     local blacklist = {}
@@ -83,7 +84,12 @@ function seed(roboport, seed_logistic_only)
         end
     end
 
-    local max_seeds = settings.global["agricultural-roboport-max-seeds-per-tick"] and settings.global["agricultural-roboport-max-seeds-per-tick"].value or 10
+    -- Fix: settings.global is not available in this context, use game.settings.global or a default value
+    -- Factorio 2.0+ API: use settings.global, not game.settings or settings.global
+    local max_seeds = 10
+    if settings and settings.global and settings.global["agricultural-roboport-max-seeds-per-tick"] then
+        max_seeds = settings.global["agricultural-roboport-max-seeds-per-tick"].value or 10
+    end
     local placed = 0
 
     for x = math.ceil(roboport.position.x - radius + 2), math.floor(roboport.position.x + radius - 2), step do

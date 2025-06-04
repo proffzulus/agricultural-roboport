@@ -27,19 +27,29 @@ script.on_event(defines.events.on_gui_opened, function(event)
     local is_roboport_ghost = entity and entity.name == "entity-ghost" and entity.ghost_name == "agricultural-roboport"
     if is_roboport or is_roboport_ghost then
         local player = game.get_player(event.player_index)
-        -- Remove old custom GUI if present
         if player.gui.relative.agricultural_roboport_mode then
             player.gui.relative.agricultural_roboport_mode.destroy()
         end
-
-        -- Use correct key for storage: unit_number for real, coordinates for ghost
         local unit_key
         if is_roboport then
             unit_key = entity.unit_number
         elseif is_roboport_ghost then
             unit_key = string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
         end
-        local mode = storage.agricultural_roboports[unit_key] or 0
+        -- Fix: force settings table to be present for ghosts (and real) so UI always sees a table, not metatable default
+        -- Always ensure a table exists for ghost roboports before reading/writing settings
+        if not storage.agricultural_roboports[unit_key] then
+            storage.agricultural_roboports[unit_key] = {
+                mode = 0,
+                seed_logistic_only = false,
+                use_filter = false,
+                filter_invert = false,
+                filters = nil,
+            }
+        end
+        local settings = storage.agricultural_roboports[unit_key]
+        local mode = settings.mode or 0
+        local seed_logistic_only = settings.seed_logistic_only or false
         local frame = player.gui.relative.add{
             type = "frame",
             name = "agricultural_roboport_mode",
@@ -59,7 +69,6 @@ script.on_event(defines.events.on_gui_opened, function(event)
             right_label_caption = {"agricultural-roboport.mode-seed"},
             allow_none_state = true
         }
-        local seed_logistic_only = storage.agricultural_roboports[tostring(unit_key).."_seed_logistic_only"] or false
         frame.add{
             type = "checkbox",
             name = "agricultural_roboport_seed_logistic_only_" .. tostring(unit_key),
@@ -90,7 +99,7 @@ script.on_event(defines.events.on_gui_opened, function(event)
         local use_filter_checkbox = use_filter_row.add{
             type = "checkbox",
             name = "agricultural_roboport_use_filter_checkbox_" .. tostring(unit_key),
-            state = storage.agricultural_roboports[tostring(unit_key).."_use_filter"] or false,
+            state = settings.use_filter or false,
             caption = {"gui-inserter.use-filters"}
         }
         -- Container for the rest of the filter controls
@@ -114,7 +123,7 @@ script.on_event(defines.events.on_gui_opened, function(event)
         local filter_invert_switch = switch_row.add{
             type = "switch",
             name = "agricultural_roboport_filter_invert_switch_" .. tostring(unit_key),
-            switch_state = (storage.agricultural_roboports[tostring(unit_key).."_filter_invert"] and "right") or "left",
+            switch_state = (settings.filter_invert and "right") or "left",
             left_label_caption = "",
             right_label_caption = "",
             allow_none_state = false
@@ -130,15 +139,7 @@ script.on_event(defines.events.on_gui_opened, function(event)
             name = "agricultural_roboport_filter_table_" .. tostring(unit_key),
             column_count = 5
         }
-        local filters_raw = storage.agricultural_roboports[tostring(unit_key).."_filters"]
-        local filters = {}
-        if type(filters_raw) == "table" then
-            for i = 1, 5 do
-                filters[i] = filters_raw[i] or nil
-            end
-        else
-            for i = 1, 5 do filters[i] = nil end
-        end
+        local filters = settings.filters or {}
         -- Only support item selection for now
         -- Use rawget(_G, 'prototypes') for prototype existence check (Factorio 2.0+)
         -- Prepare for deferred elem_value setting
@@ -224,24 +225,30 @@ script.on_event(defines.events.on_gui_switch_state_changed, function(event)
     local element = event.element
     if not (element and element.valid) then return end
     -- Handle roboport mode switch
+    -- When updating settings from UI, always update the table (never replace with nil or primitive)
     if element.name:find("^agricultural_roboport_mode_switch_") then
         local unit_key = element.name:match("^agricultural_roboport_mode_switch_(.+)$")
         if unit_key then
             local num_key = tonumber(unit_key)
             if num_key then unit_key = num_key end
+            if not storage.agricultural_roboports[unit_key] then
+                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
+            end
+            local settings = storage.agricultural_roboports[unit_key]
             local new_mode = switch_state_to_mode(element.switch_state)
-            storage.agricultural_roboports[unit_key] = new_mode
-            -- write_file_log("[UI EVENT] Roboport mode switch for key " .. tostring(unit_key) .. ": mode=" .. tostring(new_mode))
+            settings.mode = new_mode
         end
-    -- Handle filter invert switch
     elseif element.name:find("^agricultural_roboport_filter_invert_switch_") then
         local unit_key = element.name:match("^agricultural_roboport_filter_invert_switch_(.+)$")
         if unit_key then
             local num_key = tonumber(unit_key)
             if num_key then unit_key = num_key end
+            if not storage.agricultural_roboports[unit_key] then
+                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
+            end
+            local settings = storage.agricultural_roboports[unit_key]
             local invert = (element.switch_state == "right")
-            storage.agricultural_roboports[tostring(unit_key).."_filter_invert"] = invert
-            -- write_file_log("[UI EVENT] Filter invert switch for key " .. tostring(unit_key) .. ": invert=" .. tostring(invert))
+            settings.filter_invert = invert
         end
     end
 end)
@@ -256,8 +263,12 @@ script.on_event(defines.events.on_gui_checked_state_changed, function(event)
         if unit_key then
             local num_key = tonumber(unit_key)
             if num_key then unit_key = num_key end
+            if not storage.agricultural_roboports[unit_key] then
+                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
+            end
+            local settings = storage.agricultural_roboports[unit_key]
             local new_state = (element.state == true)
-            storage.agricultural_roboports[tostring(unit_key).."_use_filter"] = new_state
+            settings.use_filter = new_state
             -- write_file_log("[UI EVENT] Use filters checkbox for key " .. tostring(unit_key) .. ": state=" .. tostring(new_state))
             -- Gray out or enable filter controls accordingly
             local parent = element.parent and element.parent.parent -- use_filter_row's parent is filter_outer_flow
@@ -271,7 +282,7 @@ script.on_event(defines.events.on_gui_checked_state_changed, function(event)
                             end
                         elseif child.type == "table" then
                             -- Use helper for button state and filter compression
-                            local filters = storage.agricultural_roboports[tostring(unit_key).."_filters"] or {}
+                            local filters = settings.filters or {}
                             update_filter_buttons_and_compress_filters(unit_key, child, new_state, filters)
                         else
                             child.enabled = new_state
@@ -286,8 +297,11 @@ script.on_event(defines.events.on_gui_checked_state_changed, function(event)
         if unit_key then
             local num_key = tonumber(unit_key)
             if num_key then unit_key = num_key end
-            storage.agricultural_roboports[tostring(unit_key).."_seed_logistic_only"] = element.state
-            -- write_file_log("[UI EVENT] Seed logistic only checkbox for key " .. tostring(unit_key) .. ": state=" .. tostring(element.state))
+            if not storage.agricultural_roboports[unit_key] then
+                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
+            end
+            local settings = storage.agricultural_roboports[unit_key]
+            settings.seed_logistic_only = element.state
         end
     end
 end)
@@ -301,7 +315,11 @@ script.on_event(defines.events.on_gui_elem_changed, function(event)
             local num_key = tonumber(unit_key)
             if num_key then unit_key = num_key end
             idx = tonumber(idx)
-            local filters = storage.agricultural_roboports[tostring(unit_key).."_filters"]
+            if not storage.agricultural_roboports[unit_key] then
+                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
+            end
+            local settings = storage.agricultural_roboports[unit_key]
+            local filters = settings.filters or {}
             if type(filters) ~= "table" then filters = {} end
             if type(filters) == "table" and idx ~= nil then
                 filters[idx] = element.elem_value
@@ -315,12 +333,12 @@ script.on_event(defines.events.on_gui_elem_changed, function(event)
                 for i = #new_filters + 1, 5 do
                     new_filters[i] = nil
                 end
-                storage.agricultural_roboports[tostring(unit_key).."_filters"] = new_filters
+                settings.filters = new_filters
                 -- Update UI: re-disable/enable buttons as needed and update their values
                 local player = game.get_player(event.player_index)
                 if player and player.valid then
                     local filter_table = element.parent
-                    update_filter_buttons_and_compress_filters(unit_key, filter_table, storage.agricultural_roboports[tostring(unit_key).."_use_filter"] == true, new_filters)
+                    update_filter_buttons_and_compress_filters(unit_key, filter_table, settings.use_filter == true, new_filters)
                 end
             end
         end
@@ -411,8 +429,9 @@ function update_filter_buttons_and_compress_filters(unit_key, filter_table, use_
             end
         end
     end
-    -- Save compressed filters back to storage
-    storage.agricultural_roboports[tostring(unit_key).."_filters"] = compressed_filters
+    -- Save compressed filters back to settings table
+    local settings = storage.agricultural_roboports[unit_key]
+    settings.filters = compressed_filters
     return compressed_filters
 end
 
