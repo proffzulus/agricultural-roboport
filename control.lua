@@ -61,6 +61,7 @@ local function on_built_agricultural_roboport(entity)
         storage.agricultural_roboports[ghost_key] = nil
     else
         storage.agricultural_roboports[entity.unit_number] = 0 -- default mode
+        storage.agricultural_roboports[tostring(entity.unit_number).."_seed_logistic_only"] = false -- ensure boolean default
     end
 end
 
@@ -189,7 +190,9 @@ end
 local function copy_roboport_settings(source_key, dest_key)
     -- Copy mode and seed_logistic_only (legacy)
     storage.agricultural_roboports[dest_key] = storage.agricultural_roboports[source_key] or 0
-    storage.agricultural_roboports[tostring(dest_key).."_seed_logistic_only"] = storage.agricultural_roboports[tostring(source_key).."_seed_logistic_only"] or false
+    local s = storage.agricultural_roboports[tostring(source_key).."_seed_logistic_only"]
+    if s == nil or s == 0 then s = false end
+    storage.agricultural_roboports[tostring(dest_key).."_seed_logistic_only"] = s
     -- Copy new filter settings
     storage.agricultural_roboports[tostring(dest_key).."_use_filter"] = storage.agricultural_roboports[tostring(source_key).."_use_filter"] or false
     storage.agricultural_roboports[tostring(dest_key).."_filter_invert"] = storage.agricultural_roboports[tostring(source_key).."_filter_invert"] or false
@@ -211,7 +214,9 @@ function on_built_event_handler(event)
         if entity.tags then
             local ghost_key = string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
             storage.agricultural_roboports[ghost_key] = entity.tags.mode or 0
-            storage.agricultural_roboports[tostring(ghost_key).."_seed_logistic_only"] = entity.tags.seed_logistic_only or false
+            local s = entity.tags.seed_logistic_only
+            if s == nil or s == 0 then s = false end
+            storage.agricultural_roboports[tostring(ghost_key).."_seed_logistic_only"] = s
             storage.agricultural_roboports[tostring(ghost_key).."_use_filter"] = entity.tags.use_filter or false
             storage.agricultural_roboports[tostring(ghost_key).."_filter_invert"] = entity.tags.filter_invert or false
             if type(entity.tags.filters) == "table" then
@@ -227,7 +232,9 @@ function on_built_event_handler(event)
     if entity.name == "agricultural-roboport" then
         if event.tags then
             storage.agricultural_roboports[entity.unit_number] = event.tags.mode or 0
-            storage.agricultural_roboports[tostring(entity.unit_number).."_seed_logistic_only"] = event.tags.seed_logistic_only or false
+            local s = event.tags.seed_logistic_only
+            if s == nil or s == 0 then s = false end
+            storage.agricultural_roboports[tostring(entity.unit_number).."_seed_logistic_only"] = s
             storage.agricultural_roboports[tostring(entity.unit_number).."_use_filter"] = event.tags.use_filter or false
             storage.agricultural_roboports[tostring(entity.unit_number).."_filter_invert"] = event.tags.filter_invert or false
             if type(event.tags.filters) == "table" then
@@ -256,7 +263,9 @@ function on_built_event_handler(event)
     if event.tags and (entity.name == "entity-ghost" and entity.ghost_name == "agricultural-roboport" or entity.name == "agricultural-roboport") then
         local key = entity.name == "agricultural-roboport" and entity.unit_number or string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
         storage.agricultural_roboports[key] = event.tags.mode or 0
-        storage.agricultural_roboports[tostring(key).."_seed_logistic_only"] = event.tags.seed_logistic_only or false
+        local s = event.tags.seed_logistic_only
+        if s == nil or s == 0 then s = false end
+        storage.agricultural_roboports[tostring(key).."_seed_logistic_only"] = s
     end
 end
 
@@ -312,7 +321,8 @@ local function on_player_setup_blueprint(event)
             if real then
                 local key = real.unit_number
                 local mode = storage.agricultural_roboports[key] or 0
-                local seed_logistic_only = storage.agricultural_roboports[tostring(key).."_seed_logistic_only"] or false
+                local seed_logistic_only = storage.agricultural_roboports[tostring(key).."_seed_logistic_only"]
+                if seed_logistic_only == nil or seed_logistic_only == 0 then seed_logistic_only = false end
                 local use_filter = storage.agricultural_roboports[tostring(key).."_use_filter"] or false
                 local filter_invert = storage.agricultural_roboports[tostring(key).."_filter_invert"] or false
                 local filters = storage.agricultural_roboports[tostring(key).."_filters"]
