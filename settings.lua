@@ -7,5 +7,12 @@ data:extend({
     minimum_value = 1,
     maximum_value = 1000,
     order = "a"
+  },
+  {
+    type = "bool-setting",
+    name = "agricultural-roboport-ignore-cliffs",
+    setting_type = "runtime-global",
+    default_value = false,
+    order = "b"
   }
 })

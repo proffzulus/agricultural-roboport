@@ -5,6 +5,7 @@ game = game or {}
 script = script or {}
 prototypes = prototypes or {}
 helpers = helpers or {}
+serpent = serpent or {}
 -- 
 
 require("scripts.agricultural-roboport")
@@ -82,51 +83,28 @@ local function on_built_agricultural_roboport(entity)
     end
 end
 
--- Logging utility using Factorio's helpers for file logging
-local function write_file_log(msg)
-    if helpers and helpers.write_file then
-        helpers.write_file("agricultural-roboport.log", tostring(msg) .. "\n", true)
-    end
-end
-
 local function on_robot_built_virtual_seed(event)
     local entity = event.entity
-    write_file_log("on_robot_built_virtual_seed: entity=" .. tostring(entity) .. ", name=" .. tostring(entity and entity.name))
     if entity.name:match("^virtual%-.+%-seed$") then
         local surface = entity.surface
         local position = entity.position
-        write_file_log("  name=" .. tostring(entity.name) .. ", pos={x=" .. tostring(position and position.x) .. ",y=" .. tostring(position and position.y) .. "}")
         local seed_name = entity.name:match("^virtual%-(.+%-seed)$")
-        write_file_log("  seed_name=" .. tostring(seed_name))
         local plant_result = nil
         if seed_name and prototypes.item[seed_name] then
             plant_result = prototypes.item[seed_name].place_result or prototypes.item[seed_name].plant_result
-            write_file_log("  plant_result from prototype=" .. tostring(plant_result) .. ", type=" .. type(plant_result))
-        else
-            write_file_log("  seed_name not found in prototypes.item")
         end
         local plant_result_name = plant_result
         if (type(plant_result) == "table" or type(plant_result) == "userdata") and plant_result.name then
-            write_file_log("  plant_result is a prototype object, using .name: " .. tostring(plant_result.name))
             plant_result_name = plant_result.name
-        else
-            write_file_log("  plant_result is not a prototype object, using as is: " .. tostring(plant_result_name))
         end
-        write_file_log("  plant_result_name for lookup: " .. tostring(plant_result_name))
         if plant_result_name and prototypes.entity[plant_result_name] then
-            write_file_log("  Creating entity: " .. tostring(plant_result_name))
             surface.create_entity{
                 name = plant_result_name,
                 position = position,
                 force = entity.force
             }
             entity.destroy()
-            write_file_log("  Entity created and virtual seed destroyed.")
-        else
-            write_file_log("  plant_result or prototype not found: " .. tostring(plant_result_name))
         end
-    else
-        write_file_log("  Not a virtual seed entity: " .. tostring(entity.name))
     end
 end
 
@@ -171,7 +149,6 @@ local function on_built_virtual_seed_ghost(entity, event)
         end
         local tile = surface.get_tile(position)
         local allowed = false
-        write_file_log("on_built_virtual_seed_ghost: entity=" .. tostring(entity) .. ", ghost_name=" .. tostring(entity.ghost_name) .. ", tile=" .. tostring(tile and tile.name))
         if restrictions then
             for _, allowed_tile in pairs(restrictions) do
                 if tile.name == allowed_tile.first or tile.name == allowed_tile then
@@ -179,17 +156,13 @@ local function on_built_virtual_seed_ghost(entity, event)
                     break
                 end
             end
-            write_file_log("  restrictions found, allowed=" .. tostring(allowed))
         else
             allowed = true -- No restrictions, allow by default
-            write_file_log("  no restrictions, allowed by default")
         end
         if allowed and plant_proto and type(plant_proto.surface_conditions) == "table" then
             allowed = surface_matches_conditions(surface, plant_proto.surface_conditions)
-            write_file_log("  surface_conditions present, allowed=" .. tostring(allowed))
         end
         if not allowed then
-            write_file_log("  Not allowed, destroying ghost.")
             entity.destroy()
             local player = game.get_player(event.player_index)
             if player then
@@ -198,8 +171,6 @@ local function on_built_virtual_seed_ghost(entity, event)
                     create_at_cursor = true,
                 })
             end
-        else
-            write_file_log("  Ghost placement allowed.")
         end
     end
 end
@@ -225,8 +196,8 @@ function on_built_event_handler(event)
     local entity = event.created_entity or event.entity
     if not entity then return end
     if entity.name == "entity-ghost" and entity.ghost_name == "agricultural-roboport" then
+        local ghost_key = string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
         if entity.tags then
-            local ghost_key = string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
             storage.agricultural_roboports[ghost_key] = {
                 mode = entity.tags.mode or 0,
                 seed_logistic_only = entity.tags.seed_logistic_only or false,
@@ -234,7 +205,18 @@ function on_built_event_handler(event)
                 filter_invert = entity.tags.filter_invert or false,
                 filters = (type(entity.tags.filters) == "table" and (function() local f = {}; for i=1,5 do f[i]=entity.tags.filters[i] end; return f end)()) or nil,
                 surface = entity.surface.name,
-                position = {x = entity.position.x, y = entity.position.y},
+                position = {x = entity.position.x, y = entity.position.y}
+            }
+        else
+            -- Always create a default settings table for manually placed ghosts
+            storage.agricultural_roboports[ghost_key] = {
+                mode = 0,
+                seed_logistic_only = false,
+                use_filter = false,
+                filter_invert = false,
+                filters = nil,
+                surface = entity.surface.name,
+                position = {x = entity.position.x, y = entity.position.y}
             }
         end
         return
@@ -350,6 +332,24 @@ local function on_player_setup_blueprint(event)
                     for j = 1, 5 do tags.filters[j] = settings.filters[j] end
                 end
                 bp.set_blueprint_entity_tags(i, tags)
+            else
+                -- Check for ghost at this position
+                local ghost = surface.find_entity("entity-ghost", ent.position)
+                if ghost and ghost.ghost_name == "agricultural-roboport" then
+                    local ghost_key = string.format("ghost_%d_%d_%s", ghost.position.x, ghost.position.y, ghost.surface.name)
+                    local settings = storage.agricultural_roboports[ghost_key] or {}
+                    local tags = {
+                        mode = settings.mode or 0,
+                        seed_logistic_only = settings.seed_logistic_only or false,
+                        use_filter = settings.use_filter or false,
+                        filter_invert = settings.filter_invert or false,
+                    }
+                    if type(settings.filters) == "table" then
+                        tags.filters = {}
+                        for j = 1, 5 do tags.filters[j] = settings.filters[j] end
+                    end
+                    bp.set_blueprint_entity_tags(i, tags)
+                end
             end
         end
     end
@@ -405,7 +405,6 @@ script.on_nth_tick(300, function(event)
             end
         end
     end
-    write_file_log("[agroport nth_tick] processed="..tostring(count))
 end)
 
 script.on_event(defines.events.on_built_entity, on_built_event_handler, {{filter = "name", mode="or", name = "entity-ghost"}, {filter = "name", mode="or", name = "agricultural-roboport"}})

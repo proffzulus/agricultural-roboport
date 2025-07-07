@@ -6,32 +6,6 @@ local serpent = serpent or {}
 
 -- implement "seeding" routine:
 -- place entity-ghost with ghost-name "virtual-tree-seed" every 3 tiles within all construction range
-
--- Helper: Check if a surface matches all surface_conditions of a plant
-local function surface_matches_conditions(surface, surface_conditions)
-    if not surface_conditions then return true end
-    if type(surface_conditions) == "table" then
-        -- If array: check if surface.name matches any entry
-        if #surface_conditions > 0 then
-            for _, v in ipairs(surface_conditions) do
-                if surface.name == v then
-                    return true
-                end
-            end
-            return false
-        else
-            -- Dictionary: check key-value pairs
-            for k, v in pairs(surface_conditions) do
-                if type(k) == "string" and surface[k] ~= v then
-                    return false
-                end
-            end
-            return true
-        end
-    end
-    return false
-end
-
 function seed(roboport, seed_logistic_only)
     local virtual_seed_info = storage.virtual_seed_info
     if not virtual_seed_info then
@@ -64,11 +38,10 @@ function seed(roboport, seed_logistic_only)
     end
     local step = 3
 
-    local settings = storage.agricultural_roboports[roboport.unit_number] or {}
-    local filters = settings.filters or {}
+    local filters = storage.agricultural_roboports[tostring(roboport.unit_number).."_filters"]
     if type(filters) ~= "table" then filters = {} end
-    local use_filter = settings.use_filter
-    local filter_invert = settings.filter_invert
+    local use_filter = storage.agricultural_roboports[tostring(roboport.unit_number).."_use_filter"]
+    local filter_invert = storage.agricultural_roboports[tostring(roboport.unit_number).."_filter_invert"]
 
     local whitelist = {}
     local blacklist = {}
@@ -84,24 +57,30 @@ function seed(roboport, seed_logistic_only)
         end
     end
 
-    -- Fix: settings.global is not available in this context, use game.settings.global or a default value
-    -- Factorio 2.0+ API: use settings.global, not game.settings or settings.global
-    local max_seeds = 10
-    if settings and settings.global and settings.global["agricultural-roboport-max-seeds-per-tick"] then
-        max_seeds = settings.global["agricultural-roboport-max-seeds-per-tick"].value or 10
-    end
+    local max_seeds = settings.global["agricultural-roboport-max-seeds-per-tick"] and settings.global["agricultural-roboport-max-seeds-per-tick"].value or 10
     local placed = 0
 
     for x = math.ceil(roboport.position.x - radius + 2), math.floor(roboport.position.x + radius - 2), step do
         for y = math.ceil(roboport.position.y - radius + 2), math.floor(roboport.position.y + radius - 2), step do
             if placed >= max_seeds then return end
             local pos = {x = x, y = y}
-            local entities = surface.count_entities_filtered{
-                area = {{pos.x - 1.4, pos.y - 1.4}, {pos.x + 1.4, pos.y + 1.4}},
-                type = {"corpse"},
-                invert = true,
-            }
-            if entities == 0 then
+  
+            -- Check for any real entities (excluding corpses and those marked for deconstruction) or any ghosts in the area
+            local area = {{pos.x - 1.4, pos.y - 1.4}, {pos.x + 1.4, pos.y + 1.4}}
+            local entities = surface.find_entities_filtered{area = area}
+            local obstacle_found = false
+            for _, ent in ipairs(entities) do
+                if ent.type ~= "corpse" then
+                    if ent.name == "entity-ghost" then
+                        obstacle_found = true
+                        break
+                    elseif not ent.to_be_deconstructed() then
+                        obstacle_found = true
+                        break
+                    end
+                end
+            end
+            if not obstacle_found then
                 local tiles = {}
                 for dx = -1, 1 do
                     for dy = -1, 1 do
@@ -218,7 +197,12 @@ function harvest(roboport, current_tick)
         end
     end
     -- Mark neutral trees, rocks, and cliffs for deconstruction
-    local neutral_types = {"tree", "simple-entity", "cliff"}
+    
+	local ignore_cliffs = settings.global and settings.global["agricultural-roboport-ignore-cliffs"] and settings.global["agricultural-roboport-ignore-cliffs"].value or false
+    local neutral_types = {"tree", "simple-entity"}
+    if not ignore_cliffs then
+        table.insert(neutral_types, "cliff")
+    end
     for _, entity_type in ipairs(neutral_types) do
         for _, neutral in pairs(roboport.surface.find_entities_filtered{ area = area, type = entity_type, force = "neutral" }) do
             if neutral.valid then

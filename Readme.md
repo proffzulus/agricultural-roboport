@@ -7,12 +7,12 @@
 - [x] Add Agricultural Roboport automatic seeding and harvesting of plants
 - [x] Add Agricultural Roboport UI, which features modes of operation, filtering of allowed seeds and construction zone
 - [x] Add performance-related settings (max. allowed seeds to place at once)
+- [x] Add options on either to remove cliffs automatically or not, default to yes
+- [x] Add graphics for virtual seeds
 - [ ] Improve performance by time-division-multiplexing the seeding and harvesting tasks of multiple roboports
 - [ ] Fix water-based plants seeding issue
-- [ ] Add options on either to remove cliffs automatically or not, default to yes though
-- [ ] Add graphics for virtual seeds
-- [ ] Finalize and review all in-game translations
 - [ ] Add missing translation keys for new features and UI elements
+- [ ] Finalize and review all in-game translations
 - [ ] Provide support for essential languages:
 	- [ ] English (en)
 	- [ ] German (de)
