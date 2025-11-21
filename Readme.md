@@ -12,16 +12,16 @@
 - [x] Add graphics for virtual seeds
 - [x] Improve performance by time-division-multiplexing the seeding and harvesting tasks of multiple roboports
 - [x] Fix water-based plants seeding issue
-- [ ] Add missing translation keys for new features and UI elements
-- [ ] Finalize and review all in-game translations
-- [ ] Provide support for essential languages:
-	- [ ] English (en)
-	- [ ] German (de)
-	- [ ] Spanish (es)
-	- [ ] French (fr)
-	- [ ] Russian (ru)
-	- [ ] Chinese (zh)
-	- [ ] Japanese (ja)
+- [x] Add missing translation keys for new features and UI elements
+- [x] Finalize and review all in-game translations
+- [x] Provide support for essential languages:
+	- [x] English (en)
+	- [x] German (de)
+	- [x] Spanish (es)
+	- [x] French (fr)
+	- [x] Russian (ru)
+	- [x] Chinese (zh)
+	- [x] Japanese (ja)
 - [ ] Invite community contributions for additional languages
 ---
 
