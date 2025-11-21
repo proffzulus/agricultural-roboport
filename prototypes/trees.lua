@@ -37,11 +37,9 @@ for seed_name, seed_item in pairs(data.raw.item or {}) do
         base.selection_box = {{-0.9, -0.9}, {0.9, 0.9}}
 		base.minable = {mining_time = 0.1, result = nil}
         base.inventory_size = 0
+		base.collision_mask = {layers={object=true, train=true, is_object=true, is_lower_object=true}}
         table.insert(virtual_seeds, base)
     end
 end
 
 data:extend(virtual_seeds)
-
-
-

@@ -21,7 +21,7 @@ local agricultural_roboport_recipe = {
 	type = "recipe",
 	name = "agricultural-roboport",
 	localised_name = {"agricultural-roboport.name"},
-	enabled = true,
+	enabled = false,
 	energy_required = 10,
 	ingredients = {
 		{type = "item", name = "roboport", amount = 1},
