@@ -4,7 +4,7 @@
 	"title": "Agricultural Roboport",
 	"author": "Proffzulus",
 	"contact": "",
-	"homepage": "",
+	"homepage": "https://github.com/proffzulus/agricultural-roboport",
 	"description": "Adds an agricultural roboport for automated crop management executed by robots.",
 	"factorio_version": "2.0",
 	"dependencies": [
