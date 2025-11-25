@@ -543,6 +543,13 @@ local function on_robot_built_entity_dispatch(event)
     end
 end
 
+local function on_script_raised_built_entity_dispatch(event)
+	local entity = event.entity
+	if entity.name:match("^virtual%-.+%-seed$") then
+		on_robot_built_virtual_seed(event)
+	end
+end
+
 -- Helper: Decide and perform actions based on operating mode
 process_agricultural_roboport = function(entity, tick)
     if not (entity.energy and entity.energy > 0) then
@@ -582,12 +589,14 @@ script.on_event(defines.events.on_runtime_mod_setting_changed, function(event)
     end
 end)
 
+
+script.on_event(defines.events.script_raised_built, on_script_raised_built_entity_dispatch)
+
 script.on_event(defines.events.on_built_entity, on_built_event_handler, {{filter = "name", mode="or", name = "entity-ghost"}, {filter = "name", mode="or", name = "agricultural-roboport"}})
 
 script.on_event({defines.events.on_entity_died, defines.events.on_player_mined_entity, defines.events.on_robot_mined_entity}, on_remove_agricultural_roboport)
 
 script.on_event(defines.events.on_robot_built_entity, on_robot_built_entity_dispatch)
-
 script.on_event(defines.events.on_entity_settings_pasted, on_entity_settings_pasted)
 
 script.on_event(defines.events.on_player_setup_blueprint, on_player_setup_blueprint)
