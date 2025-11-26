@@ -5,10 +5,13 @@ local virtual_seeds = {}
 
 for seed_name, seed_item in pairs(data.raw.item or {}) do
     if seed_name:match("%-seed$") then
+		if (not seed_item.plant_result) then
+			goto continue
+		end
         local base = util.table.deepcopy(data.raw["container"]["wooden-chest"])
         base.name = "virtual-" .. seed_name
 		base.localised_name = {"agricultural-roboport.request-for-planting"};
-        base.icon = seed_item.icon
+        base.icon = seed_item.icon or seed_item.icons[1].icon
         base.icon_size = seed_item.icon_size
         base.picture = {
             layers = {
@@ -21,7 +24,7 @@ for seed_name, seed_item in pairs(data.raw.item or {}) do
                     shift = util.by_pixel(0, -10),
                 },
                 {
-                    filename = seed_item.icon,
+                    filename = seed_item.icon or seed_item.icons[1].icon,
                     priority = "extra-high",
                     width =  64,
                     height = 64,
@@ -40,6 +43,7 @@ for seed_name, seed_item in pairs(data.raw.item or {}) do
 		base.collision_mask = {layers={object=true, train=true, is_object=true, is_lower_object=true}}
         table.insert(virtual_seeds, base)
     end
+::continue::
 end
 
 data:extend(virtual_seeds)
