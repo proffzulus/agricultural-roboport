@@ -32,6 +32,7 @@ end
 
 require("scripts.agricultural-roboport")
 require("scripts.UI")
+local tile_buildability = require("scripts.tile_buildability")
 
 -- TDM configuration: read from runtime-global settings (fall back to defaults)
 local DEFAULT_TDM_PERIOD = 300 -- ticks (5 seconds)
@@ -179,19 +180,32 @@ local roboport_modes_mt = {
     end
 }
 
-local function build_virtual_seed_info()
+function Build_virtual_seed_info()
     local info = {}
     for seed_name, seed_item in pairs(prototypes.item) do
         if seed_name:match("%-seed$") then
             local plant_result = seed_item.place_result or seed_item.plant_result
             local plant_name = (type(plant_result) == "table" or type(plant_result) == "userdata") and plant_result.name or plant_result
             local plant_proto = plant_name and prototypes.entity[plant_name]
-            local restrictions = plant_proto and plant_proto.autoplace_specification and plant_proto.autoplace_specification.tile_restriction
-            if not restrictions and plant_proto then
-                restrictions = plant_proto.autoplace and plant_proto.autoplace.tile_restriction or {} -- allowed anywhere
+            -- Safely read autoplace/autoplace_specification.tile_restriction (some prototypes may omit keys)
+            local restrictions = nil
+            local tile_buildability_rules = nil
+            if plant_proto then
+                local ok, spec = pcall(function() return plant_proto.autoplace_specification end)
+                if ok and spec and spec.tile_restriction then
+                    restrictions = spec.tile_restriction
+                else
+                    local ok2, ap = pcall(function() return plant_proto.autoplace end)
+                    if ok2 and ap and ap.tile_restriction then
+                        restrictions = ap.tile_restriction
+                    end
+                end
+                local ok3, tbr = pcall(function() return plant_proto.tile_buildability_rules end)
+                if ok3 and tbr then tile_buildability_rules = tbr end
             end
             info[seed_name] = {
                 tile_restriction = restrictions,
+                tile_buildability_rules = tile_buildability_rules,
                 plant_proto = plant_proto
             }
         end
@@ -201,7 +215,7 @@ end
 
 script.on_init(function()
     storage.agricultural_roboports = setmetatable({}, roboport_modes_mt)
-    storage.virtual_seed_info = build_virtual_seed_info()
+    storage.virtual_seed_info = Build_virtual_seed_info()
     -- initialize TDM storage to safe defaults
     storage._tdm = storage._tdm or { version = 0, snapshot_version = 0, keys = {}, next_index = 1, registered_interval = nil }
     -- Re-read TDM settings at runtime and register the handler now that `game` is available
@@ -311,19 +325,37 @@ local function on_built_virtual_seed_ghost(entity, event)
         local plant_result = seed_item and (seed_item.place_result or seed_item.plant_result)
         local plant_name = (type(plant_result) == "table" or type(plant_result) == "userdata") and plant_result.name or plant_result
         local plant_proto = plant_name and prototypes.entity[plant_name]
-        local restrictions = plant_proto and plant_proto.autoplace_specification and plant_proto.autoplace_specification.tile_restriction
-        if not restrictions and plant_proto then
-            restrictions = plant_proto.autoplace and plant_proto.autoplace.tile_restriction
+        local restrictions = nil
+        local tile_buildability_rules = nil
+        if plant_proto then
+            local ok, spec = pcall(function() return plant_proto.autoplace_specification end)
+            if ok and spec and spec.tile_restriction then
+                restrictions = spec.tile_restriction
+            else
+                local ok2, ap = pcall(function() return plant_proto.autoplace end)
+                if ok2 and ap and ap.tile_restriction then
+                    restrictions = ap.tile_restriction
+                end
+            end
+            local ok3, tbr = pcall(function() return plant_proto.tile_buildability_rules end)
+            if ok3 and tbr then tile_buildability_rules = tbr end
         end
         local tile = surface.get_tile(position)
         local allowed = false
         if restrictions then
             for _, allowed_tile in pairs(restrictions) do
-                if tile.name == allowed_tile.first or tile.name == allowed_tile then
+                if tile.name == (allowed_tile.first or allowed_tile) then
                     allowed = true
                     break
                 end
             end
+        elseif tile_buildability_rules then
+            local info = { tile_buildability_rules = tile_buildability_rules }
+            local allowed_tbr, dbg = tile_buildability.evaluate_tile_buildability(surface, position, seed_name, info, plant_proto)
+            if write_file_log then
+                write_file_log("ghost:tile_check", seed_name, dbg.center_tile or "<nil>", allowed_tbr and "allowed" or "blocked", serpent and serpent.block and serpent.block(dbg) or tostring(dbg))
+            end
+            allowed = allowed_tbr
         else
             allowed = true -- No restrictions, allow by default
         end
@@ -603,8 +635,8 @@ script.on_event(defines.events.on_player_setup_blueprint, on_player_setup_bluepr
 
 script.on_configuration_changed(function()
     if not storage.virtual_seed_info then
-        if build_virtual_seed_info then
-            storage.virtual_seed_info = build_virtual_seed_info()
+        if Build_virtual_seed_info then
+            storage.virtual_seed_info = Build_virtual_seed_info()
         else
             -- fallback: inline build logic
             local info = {}
@@ -613,12 +645,24 @@ script.on_configuration_changed(function()
                     local plant_result = seed_item.place_result or seed_item.plant_result
                     local plant_name = (type(plant_result) == "table" or type(plant_result) == "userdata") and plant_result.name or plant_result
                     local plant_proto = plant_name and prototypes.entity[plant_name]
-                    local restrictions = plant_proto and plant_proto.autoplace_specification and plant_proto.autoplace_specification.tile_restriction
-                    if not restrictions and plant_proto then
-                        restrictions = plant_proto.autoplace and plant_proto.autoplace.tile_restriction
+                    local restrictions = nil
+                    local tile_buildability_rules = nil
+                    if plant_proto then
+                        local ok, spec = pcall(function() return plant_proto.autoplace_specification end)
+                        if ok and spec and spec.tile_restriction then
+                            restrictions = spec.tile_restriction
+                        else
+                            local ok2, ap = pcall(function() return plant_proto.autoplace end)
+                            if ok2 and ap and ap.tile_restriction then
+                                restrictions = ap.tile_restriction
+                            end
+                        end
+                        local ok3, tbr = pcall(function() return plant_proto.tile_buildability_rules end)
+                        if ok3 and tbr then tile_buildability_rules = tbr end
                     end
                     info[seed_name] = {
                         tile_restriction = restrictions,
+                        tile_buildability_rules = tile_buildability_rules,
                         plant_proto = plant_proto
                     }
                 end
