@@ -130,7 +130,7 @@ function seed(roboport, seed_logistic_only)
                 local virtual_seed_name = "virtual-" .. seed_name
                 if plant_name and prototypes.entity[virtual_seed_name] then
                     local info = virtual_seed_info[seed_name] or {}
-                    local restrictions = info.tile_restriction
+                    local restrictions = info.tile_restriction or nil
                     -- Normalize restrictions to a flat list of tile names
                     local normalized_restrictions = nil
                     if restrictions then

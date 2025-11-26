@@ -188,7 +188,7 @@ local function build_virtual_seed_info()
             local plant_proto = plant_name and prototypes.entity[plant_name]
             local restrictions = plant_proto and plant_proto.autoplace_specification and plant_proto.autoplace_specification.tile_restriction
             if not restrictions and plant_proto then
-                restrictions = plant_proto.autoplace and plant_proto.autoplace.tile_restriction
+                restrictions = plant_proto.autoplace and plant_proto.autoplace.tile_restriction or {} -- allowed anywhere
             end
             info[seed_name] = {
                 tile_restriction = restrictions,
