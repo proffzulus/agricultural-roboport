@@ -1,0 +1,39 @@
+---------------------------------------------------------------------------------------------------
+Version: 1.0.5
+Date: 2025-11-30
+  Bugfixes:
+    - Fixed quality roboports not being processed by TDM handler (using unit_number lookup and quality-aware entity search)
+    - Fixed metatable behavior to properly return nil for non-existent storage keys
+    - Added comprehensive debug logging for troubleshooting entity creation and storage
+---------------------------------------------------------------------------------------------------
+Version: 1.0.4
+Date: 2024
+  Bugfixes:
+    - Fixed crash when seeds don't have tile restrictions (now placeable anywhere)
+    - Added compatibility with mods using tile_buildability_rules (e.g., wayward-seas)
+    - Fixed handling of plant specifications without autoplace or autoplace_specification
+---------------------------------------------------------------------------------------------------
+Version: 1.0.2
+Date: 2024
+  Bugfixes:
+    - Fixed handling of entity prototypes using "icons" property instead of "icon"
+---------------------------------------------------------------------------------------------------
+Version: 1.0.1
+Date: 2024
+  Bugfixes:
+    - Added support for mod-invoked ghost construction (e.g., Mouse-Over Construction mod)
+    - Fixed property initialization issue where values were set to 0 instead of false
+---------------------------------------------------------------------------------------------------
+Version: 1.0.0
+Date: 2024
+  Major Features:
+    - Initial release of Agricultural Roboport mod
+    - Automated crop management with construction robots
+    - Operating modes: Harvest and Seed, Harvest Only, Seed Only
+    - Seed filtering system with up to 5 seed types
+    - Logistic network integration for seed requests
+    - Settings paste support between roboports
+    - Blueprint support with settings preservation
+    - Configurable TDM (Time-Division Multiplexing) processing
+    - Multi-language localization support (EN, DE, ES, FR, JA, RU, ZH-CN)
+    - Custom status indicators showing operating mode

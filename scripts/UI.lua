@@ -187,7 +187,7 @@ script.on_event(defines.events.on_gui_opened, function(event)
         -- Helper: update filter buttons and compress filters (vanilla inserter logic)
         filters = update_filter_buttons_and_compress_filters(unit_key, filter_table, use_filter_checkbox.state, filters)
         filter_table.enabled = true -- Table container itself should always be enabled for layout
-        -- write_file_log("[UI] Open GUI for key=", tostring(unit_key), "mode=", tostring(mode))
+        write_file_log("[UI] Open GUI for key=", tostring(unit_key), "mode=", tostring(mode))
         -- Log parent chain for debugging
         local function log_parent_chain(element)
             local chain = {}
@@ -271,7 +271,7 @@ script.on_event(defines.events.on_gui_checked_state_changed, function(event)
             local settings = storage.agricultural_roboports[unit_key]
             local new_state = (element.state == true)
             settings.use_filter = new_state
-            -- write_file_log("[UI] Use filters checkbox for key=", tostring(unit_key), "state=", tostring(new_state))
+            write_file_log("[UI] Use filters checkbox for key=", tostring(unit_key), "state=", tostring(new_state))
             -- Gray out or enable filter controls accordingly
             local parent = element.parent and element.parent.parent -- use_filter_row's parent is filter_outer_flow
             if parent then
@@ -341,7 +341,7 @@ script.on_event(defines.events.on_gui_elem_changed, function(event)
                 if player and player.valid then
                     local filter_table = element.parent
                     update_filter_buttons_and_compress_filters(unit_key, filter_table, settings.use_filter == true, new_filters)
-                    -- write_file_log("[UI] Selected filter for key=", tostring(unit_key), "index=", tostring(idx), "value=", tostring(element.elem_value))
+                    write_file_log("[UI] Selected filter for key=", tostring(unit_key), "index=", tostring(idx), "value=", tostring(element.elem_value))
                 end
             end
         end

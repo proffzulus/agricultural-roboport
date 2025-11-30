@@ -33,6 +33,7 @@ end
 require("scripts.agricultural-roboport")
 require("scripts.UI")
 local tile_buildability = require("scripts.tile_buildability")
+require("debug-commands")
 
 -- TDM configuration: read from runtime-global settings (fall back to defaults)
 local DEFAULT_TDM_PERIOD = 300 -- ticks (5 seconds)
@@ -86,7 +87,9 @@ local function tdm_tick_handler(event)
         -- clamp next_index
         if storage._tdm.next_index < 1 then storage._tdm.next_index = 1 end
         if storage._tdm.next_index > #keys then storage._tdm.next_index = 1 end
-        -- snapshot rebuilt, total keys: #keys
+        if write_file_log then
+            write_file_log("[TDM] Snapshot rebuilt", "total_keys=", #keys, "keys=", serpent and serpent.line and serpent.line(keys) or tostring(keys))
+        end
     end
 
     local keys = storage._tdm.keys or {}
@@ -116,30 +119,81 @@ local function tdm_tick_handler(event)
             local settings = storage.agricultural_roboports[key]
             if type(key) == "number" and settings then
                 local entity = nil
-                if settings.surface and settings.position then
-                    local surface = game.surfaces and game.surfaces[settings.surface]
-                    if surface then
-                        entity = surface.find_entity("agricultural-roboport", settings.position)
-                    end
-                else
-                    -- Fallback: try to resolve by unit number (helps older save files)
-                    if game.get_entity_by_unit_number then
-                        entity = game.get_entity_by_unit_number(key)
-                    end
-                    if entity and entity.valid and entity.name == "agricultural-roboport" then
-                        -- populate missing storage fields for future fast lookup
-                        settings.surface = entity.surface.name
-                        settings.position = { x = entity.position.x, y = entity.position.y }
+                -- ALWAYS try to resolve by unit_number first (most reliable for quality entities)
+                if game.get_entity_by_unit_number then
+                    entity = game.get_entity_by_unit_number(key)
+                    if write_file_log and entity then
+                        write_file_log("[TDM] Found entity by unit_number", "key=", key, "name=", entity.name, "quality=", entity.quality and entity.quality.name or "normal")
+                    elseif write_file_log then
+                        write_file_log("[TDM] Unit_number lookup failed", "key=", key, "has_position=", tostring(settings.position ~= nil))
                     end
                 end
-                if entity and entity.valid and entity.unit_number == key then
+                
+                -- Validate that it's actually an agricultural roboport and update position if needed
+                if entity and entity.valid and entity.name == "agricultural-roboport" then
+                    -- Update stored position if it's missing or changed
+                    if not settings.surface or not settings.position then
+                        settings.surface = entity.surface.name
+                        settings.position = { x = entity.position.x, y = entity.position.y }
+                        if write_file_log then
+                            write_file_log("[TDM] Updated missing position", "key=", key)
+                        end
+                    end
+                    -- Process the roboport
                     process_agricultural_roboport(entity, event.tick)
                     processed = processed + 1
                 else
-                    -- couldn't locate entity; remove stale entry
-                    -- removing stale key
-                    storage.agricultural_roboports[key] = nil
-                    storage._tdm.version = (storage._tdm.version or 0) + 1
+                    -- Entity not found by unit_number, try position-based lookup as fallback
+                    -- NOTE: We use find_entities_filtered instead of find_entity to match ALL qualities
+                    if settings.surface and settings.position then
+                        local surface = game.surfaces and game.surfaces[settings.surface]
+                        if surface then
+                            -- Use find_entities_filtered with radius to find entities at this position (any quality)
+                            local entities = surface.find_entities_filtered{
+                                name = "agricultural-roboport",
+                                position = settings.position,
+                                radius = 0.5  -- Small radius to catch the exact position
+                            }
+                            
+                            -- Look for entity with matching unit_number
+                            local found = false
+                            for _, e in ipairs(entities) do
+                                if e.unit_number == key then
+                                    entity = e
+                                    found = true
+                                    if write_file_log then
+                                        write_file_log("[TDM] Found by position (quality-aware)", "key=", key, "quality=", e.quality and e.quality.name or "normal")
+                                    end
+                                    process_agricultural_roboport(entity, event.tick)
+                                    processed = processed + 1
+                                    break
+                                end
+                            end
+                            
+                            if not found then
+                                -- Couldn't locate entity; remove stale entry
+                                if write_file_log then
+                                    write_file_log("[TDM] REMOVING: not found by position", "key=", key, "pos=", serpent and serpent.line and serpent.line(settings.position) or "?", "entities_at_pos=", #entities)
+                                end
+                                storage.agricultural_roboports[key] = nil
+                                storage._tdm.version = (storage._tdm.version or 0) + 1
+                            end
+                        else
+                            -- Surface doesn't exist, remove stale entry
+                            if write_file_log then
+                                write_file_log("[TDM] REMOVING: surface not found", "key=", key, "surface=", settings.surface or "nil")
+                            end
+                            storage.agricultural_roboports[key] = nil
+                            storage._tdm.version = (storage._tdm.version or 0) + 1
+                        end
+                    else
+                        -- No position info and entity not found, remove stale entry
+                        if write_file_log then
+                            write_file_log("[TDM] REMOVING: no position and unit_number failed", "key=", key)
+                        end
+                        storage.agricultural_roboports[key] = nil
+                        storage._tdm.version = (storage._tdm.version or 0) + 1
+                    end
                 end
             end
         end
@@ -165,28 +219,43 @@ local function register_tdm_handler(interval)
 end
 
 
--- Metatable for default roboport settings (unified table)
-local roboport_modes_mt = {
-    __index = function()
-        return {
-            mode = 0, -- default to harvest and seed
-            seed_logistic_only = false,
-            use_filter = false,
-            filter_invert = false,
-            filters = nil,
-            surface = nil, -- new: surface name
-            position = nil -- new: position table {x=..., y=...}
-        }
-    end
-}
+-- Metatable for roboport settings storage
+-- NOTE: We do NOT use __index here because we need nil checks to work properly.
+-- Each roboport/ghost must explicitly have its settings created.
+local roboport_modes_mt = {}
+
+-- Helper function to create default roboport settings
+function create_default_roboport_settings()
+    return {
+        mode = 0, -- default to harvest and seed
+        seed_logistic_only = false,
+        use_filter = false,
+        filter_invert = false,
+        filters = nil,
+        surface = nil,
+        position = nil
+    }
+end
 
 function Build_virtual_seed_info()
     local info = {}
+    if write_file_log then 
+        write_file_log("Build_virtual_seed_info:start", "scanning all seed items")
+    end
+    
     for seed_name, seed_item in pairs(prototypes.item) do
         if seed_name:match("%-seed$") then
             local plant_result = seed_item.place_result or seed_item.plant_result
             local plant_name = (type(plant_result) == "table" or type(plant_result) == "userdata") and plant_result.name or plant_result
             local plant_proto = plant_name and prototypes.entity[plant_name]
+            
+            if write_file_log then
+                write_file_log("Build_virtual_seed_info:processing", 
+                    "seed=", seed_name, 
+                    "plant_name=", plant_name or "nil",
+                    "plant_proto=", plant_proto and plant_proto.name or "nil")
+            end
+            
             -- Safely read autoplace/autoplace_specification.tile_restriction (some prototypes may omit keys)
             local restrictions = nil
             local tile_buildability_rules = nil
@@ -210,60 +279,52 @@ function Build_virtual_seed_info()
             }
         end
     end
+    
+    if write_file_log then
+        local count = 0
+        for _ in pairs(info) do count = count + 1 end
+        write_file_log("Build_virtual_seed_info:complete", "total_seeds=", count)
+    end
+    
     return info
 end
 
 script.on_init(function()
+    write_file_log("=== on_init() CALLED ===", "Initializing fresh storage")
+    -- Initialize storage with metatable per Factorio data lifecycle
     storage.agricultural_roboports = setmetatable({}, roboport_modes_mt)
     storage.virtual_seed_info = Build_virtual_seed_info()
-    -- initialize TDM storage to safe defaults
-    storage._tdm = storage._tdm or { version = 0, snapshot_version = 0, keys = {}, next_index = 1, registered_interval = nil }
+    -- Initialize TDM storage to safe defaults
+    storage._tdm = { version = 0, snapshot_version = 0, keys = {}, next_index = 1, registered_interval = nil }
     -- Re-read TDM settings at runtime and register the handler now that `game` is available
     TDM_PERIOD, TDM_TICK_INTERVAL = read_tdm_settings()
     register_tdm_handler(TDM_TICK_INTERVAL)
-    end)
+    write_file_log("=== on_init() COMPLETE ===")
+end)
 
 script.on_load(function()
+    write_file_log("=== on_load() CALLED ===", "Restoring metatables")
+    -- Restore metatable for agricultural_roboports (metatables are not persisted)
+    -- This is a legitimate use of on_load per Factorio data lifecycle documentation
     if storage.agricultural_roboports then
+        local count = 0
+        for _ in pairs(storage.agricultural_roboports) do count = count + 1 end
+        write_file_log("    storage.agricultural_roboports entries before setmetatable:", count)
         setmetatable(storage.agricultural_roboports, roboport_modes_mt)
+    else
+        write_file_log("    WARNING: storage.agricultural_roboports is nil!")
     end
-    -- Ensure TDM storage exists (don't mutate other stored runtime data)
-    storage._tdm = storage._tdm or { version = 0, snapshot_version = 0, keys = {}, next_index = 1, registered_interval = nil }
-    -- Re-read TDM settings and (re)register the nth-tick handler on load so the TDM
-    -- remains active after a save is loaded.
+    -- Re-read TDM settings and (re)register the nth-tick handler on load
+    -- TDM storage already exists from save, don't modify it (on_load must not write to storage)
     TDM_PERIOD, TDM_TICK_INTERVAL = read_tdm_settings()
     register_tdm_handler(TDM_TICK_INTERVAL)
-    -- Do NOT modify storage.virtual_seed_info here; on_load must not mutate storage
+    -- Do NOT modify storage.virtual_seed_info or storage._tdm here; on_load must not mutate storage
+    write_file_log("=== on_load() COMPLETE ===")
 end)
 
 -- =====================
 -- Handler functions region
 -- =====================
-
-local function on_built_agricultural_roboport(entity)
-    local ghost_key = string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
-    local ghost_settings = storage.agricultural_roboports[ghost_key]
-    if ghost_settings ~= nil then
-        ghost_settings.surface = entity.surface.name
-        ghost_settings.position = {x = entity.position.x, y = entity.position.y}
-        storage.agricultural_roboports[entity.unit_number] = ghost_settings
-        storage.agricultural_roboports[ghost_key] = nil
-        write_file_log("[Event] Roboport built (from ghost)", "unit=", entity.unit_number, "ghost_key=", ghost_key)
-        tdm_mark_dirty()
-    else
-        storage.agricultural_roboports[entity.unit_number] = {
-            mode = 0,
-            seed_logistic_only = false,
-            use_filter = false,
-            filter_invert = false,
-            filters = nil,
-            surface = entity.surface.name,
-            position = {x = entity.position.x, y = entity.position.y},
-        }
-        write_file_log("[Event] Roboport built (new)", "unit=", entity.unit_number)
-        tdm_mark_dirty()
-    end
-end
 
 local function on_robot_built_virtual_seed(event)
     local entity = event.entity
@@ -395,85 +456,136 @@ end
 local function on_built_event_handler(event)
     local entity = event.created_entity or event.entity
     if not entity then return end
-    write_file_log("[Event] Built entity", "name=", tostring(entity.name), "pos=", serpent and serpent.block and serpent.block(entity.position) or tostring(entity.position))
+    
+    -- CRITICAL DEBUG: Check if storage table exists and has metatable
+    if not storage.agricultural_roboports then
+        write_file_log("[CRITICAL] storage.agricultural_roboports is NIL! Reinitializing...")
+        storage.agricultural_roboports = setmetatable({}, roboport_modes_mt)
+    end
+    
+    local mt = getmetatable(storage.agricultural_roboports)
+    if not mt then
+        write_file_log("[CRITICAL] Metatable is missing! Restoring...")
+        setmetatable(storage.agricultural_roboports, roboport_modes_mt)
+    end
+    
+    -- Extended logging to diagnose quality roboport issues
+    local entity_type = entity.type or "unknown"
+    local entity_quality = entity.quality and entity.quality.name or "nil"
+    local has_tags = event.tags ~= nil
+    local entity_tags = entity.tags
+    local unit_number = entity.unit_number or "nil"
+    
+    write_file_log("[Event] Built entity", 
+        "name=", tostring(entity.name),
+        "type=", entity_type,
+        "quality=", entity_quality,
+        "unit_number=", tostring(unit_number),
+        "pos=", serpent and serpent.block and serpent.block(entity.position) or tostring(entity.position))
+    
+    if entity.name == "entity-ghost" then
+        local ghost_name = entity.ghost_name or "nil"
+        write_file_log("    ghost_name=", tostring(ghost_name), "ghost_quality=", entity.quality and entity.quality.name or "nil")
+    end
+    
+    if has_tags then
+        write_file_log("    event.tags=", serpent and serpent.block and serpent.block(event.tags) or tostring(event.tags))
+    end
+    
+    if entity_tags then
+        write_file_log("    entity.tags=", serpent and serpent.block and serpent.block(entity_tags) or tostring(entity_tags))
+    end
     if entity.name == "entity-ghost" and entity.ghost_name == "agricultural-roboport" then
         local ghost_key = string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
         if entity.tags then
-            storage.agricultural_roboports[ghost_key] = {
-                mode = entity.tags.mode or 0,
-                seed_logistic_only = entity.tags.seed_logistic_only or false,
-                use_filter = entity.tags.use_filter or false,
-                filter_invert = entity.tags.filter_invert or false,
-                filters = (type(entity.tags.filters) == "table" and (function() local f = {}; for i=1,5 do f[i]=entity.tags.filters[i] end; return f end)()) or nil,
-                surface = entity.surface.name,
-                position = {x = entity.position.x, y = entity.position.y}
-            }
+			-- Handle agricultural roboport ghosts with tags
+            local settings = create_default_roboport_settings()
+            settings.mode = entity.tags.mode or 0
+            settings.seed_logistic_only = entity.tags.seed_logistic_only or false
+            settings.use_filter = entity.tags.use_filter or false
+            settings.filter_invert = entity.tags.filter_invert or false
+            settings.filters = (type(entity.tags.filters) == "table" and (function() local f = {}; for i=1,5 do f[i]=entity.tags.filters[i] end; return f end)()) or nil
+            settings.surface = entity.surface.name
+            settings.position = {x = entity.position.x, y = entity.position.y}
+            storage.agricultural_roboports[ghost_key] = settings
+			write_file_log("[Event] Ghost built with tags", "ghost_key=", ghost_key)
             tdm_mark_dirty()
         else
             -- Always create a default settings table for manually placed ghosts
-            storage.agricultural_roboports[ghost_key] = {
-                mode = 0,
-                seed_logistic_only = false,
-                use_filter = false,
-                filter_invert = false,
-                filters = nil,
-                surface = entity.surface.name,
-                position = {x = entity.position.x, y = entity.position.y}
-            }
+            local settings = create_default_roboport_settings()
+            settings.surface = entity.surface.name
+            settings.position = {x = entity.position.x, y = entity.position.y}
+            storage.agricultural_roboports[ghost_key] = settings
+			write_file_log("[Event] Ghost built without tags", "ghost_key=", ghost_key)
             tdm_mark_dirty()
         end
         return
     end
+    
+    -- Handle agricultural roboport entities
     if entity.name == "agricultural-roboport" then
+        -- Log storage state BEFORE modification
+        local count_before = 0
+        for _ in pairs(storage.agricultural_roboports) do count_before = count_before + 1 end
+        write_file_log("[Event] BEFORE storage modification", "entries=", count_before, "metatable=", tostring(getmetatable(storage.agricultural_roboports) ~= nil))
+        
         if event.tags then
-            storage.agricultural_roboports[entity.unit_number] = {
-                mode = event.tags.mode or 0,
-                seed_logistic_only = event.tags.seed_logistic_only or false,
-                use_filter = event.tags.use_filter or false,
-                filter_invert = event.tags.filter_invert or false,
-                filters = (type(event.tags.filters) == "table" and (function() local f = {}; for i=1,5 do f[i]=event.tags.filters[i] end; return f end)()) or nil,
-                surface = entity.surface.name,
-                position = {x = entity.position.x, y = entity.position.y},
-            }
+            local settings = create_default_roboport_settings()
+            settings.mode = event.tags.mode or 0
+            settings.seed_logistic_only = event.tags.seed_logistic_only or false
+            settings.use_filter = event.tags.use_filter or false
+            settings.filter_invert = event.tags.filter_invert or false
+            settings.filters = (type(event.tags.filters) == "table" and (function() local f = {}; for i=1,5 do f[i]=event.tags.filters[i] end; return f end)()) or nil
+            settings.surface = entity.surface.name
+            settings.position = {x = entity.position.x, y = entity.position.y}
+            write_file_log("[Event] About to assign to storage", "unit_number=", entity.unit_number, "type=", type(entity.unit_number))
+            storage.agricultural_roboports[entity.unit_number] = settings
+            -- Verify assignment succeeded
+            local count_after = 0
+            for _ in pairs(storage.agricultural_roboports) do count_after = count_after + 1 end
+            local verify = storage.agricultural_roboports[entity.unit_number]
+            write_file_log("[Event] AFTER storage assignment", "entries=", count_after, "verified=", tostring(verify ~= nil))
+			write_file_log("[Event] Roboport built with tags", "unit=", entity.unit_number)
             tdm_mark_dirty()
         else
             local ghost_key = string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
             local ghost_settings = storage.agricultural_roboports[ghost_key]
             if ghost_settings ~= nil then
+				write_file_log("[Event] We think this is a ghost, found settings", "unit=", entity.unit_number, "ghost_key=", ghost_key, ghost_settings)
                 ghost_settings.surface = entity.surface.name
                 ghost_settings.position = {x = entity.position.x, y = entity.position.y}
+                write_file_log("[Event] About to assign to storage", "unit_number=", entity.unit_number, "type=", type(entity.unit_number))
                 storage.agricultural_roboports[entity.unit_number] = ghost_settings
                 storage.agricultural_roboports[ghost_key] = nil
+                -- Verify assignment succeeded
+                local count_after = 0
+                for _ in pairs(storage.agricultural_roboports) do count_after = count_after + 1 end
+                local verify = storage.agricultural_roboports[entity.unit_number]
+                write_file_log("[Event] AFTER storage assignment", "entries=", count_after, "verified=", tostring(verify ~= nil))
+				write_file_log("[Event] Roboport built over ghost, copied settings", "unit=", entity.unit_number, "ghost_key=", ghost_key)
                 tdm_mark_dirty()
             else
-                storage.agricultural_roboports[entity.unit_number] = {
-                    mode = 0,
-                    seed_logistic_only = false,
-                    use_filter = false,
-                    filter_invert = false,
-                    filters = nil,
-                    surface = entity.surface.name,
-                    position = {x = entity.position.x, y = entity.position.y},
-                }
+                local settings = create_default_roboport_settings()
+                settings.surface = entity.surface.name
+                settings.position = {x = entity.position.x, y = entity.position.y}
+                write_file_log("[Event] About to assign to storage", "unit_number=", entity.unit_number, "type=", type(entity.unit_number))
+                storage.agricultural_roboports[entity.unit_number] = settings
+                -- Verify assignment succeeded
+                local count_after = 0
+                for _ in pairs(storage.agricultural_roboports) do count_after = count_after + 1 end
+                local verify = storage.agricultural_roboports[entity.unit_number]
+                write_file_log("[Event] AFTER storage assignment", "entries=", count_after, "verified=", tostring(verify ~= nil))
+				write_file_log("[Event] Roboport built without tags and ghost", "unit=", entity.unit_number)
                 tdm_mark_dirty()
             end
         end
         return
     end
+    
+    -- Handle virtual seed ghosts
     if entity.name == "entity-ghost" and entity.ghost_name and entity.ghost_name:match("^virtual%-.+%-seed$") then
         on_built_virtual_seed_ghost(entity, event)
         return
-    end
-    if event.tags and (entity.name == "entity-ghost" and entity.ghost_name == "agricultural-roboport" or entity.name == "agricultural-roboport") then
-        local key = entity.name == "agricultural-roboport" and entity.unit_number or string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
-        storage.agricultural_roboports[key] = {
-            mode = event.tags.mode or 0,
-            seed_logistic_only = event.tags.seed_logistic_only or false,
-            use_filter = event.tags.use_filter or false,
-            filter_invert = event.tags.filter_invert or false,
-            filters = (type(event.tags.filters) == "table" and (function() local f = {}; for i=1,5 do f[i]=event.tags.filters[i] end; return f end)()) or nil,
-        }
-        tdm_mark_dirty()
     end
 end
 

@@ -5,7 +5,9 @@ local virtual_seeds = {}
 
 for seed_name, seed_item in pairs(data.raw.item or {}) do
     if seed_name:match("%-seed$") then
+		log("Creating virtual seed for " .. seed_name)
 		if (not seed_item.plant_result) then
+			log("Skipping " .. seed_name .. " because it has no plant_result")
 			goto continue
 		end
         local base = util.table.deepcopy(data.raw["container"]["wooden-chest"])
@@ -42,6 +44,7 @@ for seed_name, seed_item in pairs(data.raw.item or {}) do
         base.inventory_size = 0
 		base.collision_mask = {layers={object=true, train=true, is_object=true, is_lower_object=true}}
         table.insert(virtual_seeds, base)
+		log("Added virtual seed for plant " .. seed_item.plant_result .. " with entity name " .. base.name .. ", placeable_by item " .. seed_name .. "")
     end
 ::continue::
 end

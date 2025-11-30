@@ -13,6 +13,7 @@ agricultural_roboport_entity.icons = {
 	}
 }
 agricultural_roboport_entity.filter_count = 5
+agricultural_roboport_entity.flags = {"placeable-player", "player-creation", "get-by-unit-number"}
 
 local agricultural_roboport_item = table.deepcopy(data.raw["item"]["roboport"])
 agricultural_roboport_item.name = "agricultural-roboport"
