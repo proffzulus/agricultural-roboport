@@ -1,4 +1,17 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.1.0
+Date: 2025-12-02
+  Major Features:
+    - Added quality plants and seeds support - plants now retain seed quality and display quality badges
+    - Added quality mutation system when harvesting plants with configurable chance multiplier
+    - Added startup setting to enable/disable quality tracking (requires game restart)
+    - UI now dynamically switches between quality-aware and simple item selectors based on quality setting
+    - Added quality mutation chance multiplier setting (0.5% base chance, configurable 0-100+)
+  Changes:
+    - Optimized sprite rendering using only_in_alt_mode flag for automatic visibility control
+    - Improved plant registration to handle both table and userdata quality types
+    - Added translations for new quality settings in all supported languages (EN, DE, ES, FR, JA, RU, ZH-CN)
+---------------------------------------------------------------------------------------------------
 Version: 1.0.5
 Date: 2025-11-30
   Bugfixes:

@@ -5,6 +5,15 @@ local serpent = serpent or {}
 local tile_buildability = require("scripts.tile_buildability")
 -- Forward-declare surface check so it can be used by `seed` which appears earlier
 local check_surface_conditions
+
+-- Helper to check if quality support is enabled (startup setting)
+local function is_quality_enabled()
+    if settings and settings.startup and settings.startup["agricultural-roboport-enable-quality"] then
+        return settings.startup["agricultural-roboport-enable-quality"].value
+    end
+    return true -- Default to enabled if setting not found
+end
+
 -- Helper: Logging utility using Factorio's helpers for file logging
 
 -- implement "seeding" routine:
@@ -45,16 +54,54 @@ function seed(roboport, seed_logistic_only)
         storage.agricultural_roboports[roboport.unit_number] = rsettings
     end
 
-    local whitelist = {}
-    local blacklist = {}
+    local whitelist = {} -- Format: {["item-name"] = {quality1=true, quality2=true, ...}}
+    local blacklist = {} -- Format: {["item-name"] = {quality1=true, quality2=true, ...}}
     if use_filter then
         if filter_invert then
-            for _, seed in ipairs(filters) do
-                if seed then blacklist[seed] = true end
+            for _, filter_entry in ipairs(filters) do
+                if filter_entry then
+                    local item_name = nil
+                    local quality_name = "normal"
+                    
+                    -- Support both old string format and new table format
+                    if type(filter_entry) == "string" then
+                        item_name = filter_entry
+                        quality_name = "normal"
+                    elseif type(filter_entry) == "table" and filter_entry.name then
+                        item_name = filter_entry.name
+                        quality_name = filter_entry.quality or "normal"
+                    end
+                    
+                    if item_name then
+                        if not blacklist[item_name] then
+                            blacklist[item_name] = {}
+                        end
+                        blacklist[item_name][quality_name] = true
+                    end
+                end
             end
         else
-            for _, seed in ipairs(filters) do
-                if seed then table.insert(whitelist, seed) end
+            for _, filter_entry in ipairs(filters) do
+                if filter_entry then
+                    local item_name = nil
+                    local quality_name = "normal"
+                    
+                    -- Support both old string format and new table format
+                    if type(filter_entry) == "string" then
+                        item_name = filter_entry
+                        quality_name = "normal"
+                    elseif type(filter_entry) == "table" and filter_entry.name then
+                        item_name = filter_entry.name
+                        quality_name = filter_entry.quality or "normal"
+                    end
+                    
+                    if item_name then
+                        if not whitelist[item_name] then
+                            whitelist[item_name] = {}
+                        end
+                        whitelist[item_name][quality_name] = true
+                    end
+                end
             end
         end
     end
@@ -98,22 +145,55 @@ function seed(roboport, seed_logistic_only)
                     table.insert(tiles, surface.get_tile(pos.x + dx, pos.y + dy))
                 end
             end
-            local candidate_seeds = {}
+            local candidate_seeds = {} -- Format: {{name="seed-name", quality="quality-name"}, ...}
             if use_filter and not filter_invert then
-                for _, seed in ipairs(whitelist) do
-                    table.insert(candidate_seeds, seed)
+                -- Whitelist mode: only include items+qualities from whitelist
+                -- If quality is disabled, force all to "normal"
+                local quality_support_enabled = is_quality_enabled()
+                for item_name, qualities in pairs(whitelist) do
+                    if quality_support_enabled then
+                        for quality_name, _ in pairs(qualities) do
+                            table.insert(candidate_seeds, {name = item_name, quality = quality_name})
+                        end
+                    else
+                        -- Quality disabled, only use normal quality once per item
+                        table.insert(candidate_seeds, {name = item_name, quality = "normal"})
+                    end
                 end
             else
+                -- No filter OR blacklist mode: include all seeds with all qualities (except blacklisted)
+                local quality_support_enabled = is_quality_enabled()
+                local prototypes_qual = prototypes.quality
+                local has_qualities = false
+                if quality_support_enabled and prototypes_qual then
+                    -- Check if there are any qualities by trying to get normal quality
+                    has_qualities = prototypes_qual["normal"] ~= nil
+                end
+                
                 for seed_name, seed_item in pairs(prototypes.item) do
                     if seed_name:match("%-seed$") and seed_item.plant_result then
-                        if not (use_filter and filter_invert and blacklist[seed_name]) then
-                            table.insert(candidate_seeds, seed_name)
+                        if has_qualities then
+                            -- For each seed, add all available qualities
+                            for quality_name, _ in pairs(prototypes_qual) do
+                                local is_blacklisted = use_filter and filter_invert and blacklist[seed_name] and blacklist[seed_name][quality_name]
+                                if not is_blacklisted then
+                                    table.insert(candidate_seeds, {name = seed_name, quality = quality_name})
+                                end
+                            end
+                        else
+                            -- No qualities system OR quality disabled, just use normal quality
+                            local is_blacklisted = use_filter and filter_invert and blacklist[seed_name] and blacklist[seed_name]["normal"]
+                            if not is_blacklisted then
+                                table.insert(candidate_seeds, {name = seed_name, quality = "normal"})
+                            end
                         end
                     end
                 end
             end
 			
-            for _, seed_name in ipairs(candidate_seeds) do
+            for _, seed_entry in ipairs(candidate_seeds) do
+                local seed_name = seed_entry.name
+                local quality_name = seed_entry.quality or "normal"
                 local seed_item = prototypes.item[seed_name]
                 local plant_ref = seed_item and seed_item.plant_result
                 if not check_surface_conditions(plant_ref, surface) then goto continue end
@@ -169,13 +249,20 @@ function seed(roboport, seed_logistic_only)
                     end
                     
                     if allowed then
+                        -- Force quality to "normal" if quality support is disabled
+                        local ghost_quality = is_quality_enabled() and quality_name or "normal"
+                        
                         local ghost = surface.create_entity{
                             name = "entity-ghost",
                             position = pos,
                             force = force,
-                            ghost_name = virtual_seed_name,
+                            inner_name = virtual_seed_name,
+                            quality = ghost_quality,
                             raise_built = true,
                         }
+                        if ghost and write_file_log then
+                            write_file_log("[SEED] Created ghost:", virtual_seed_name, "quality:", ghost_quality, "ghost.quality:", ghost.quality and ghost.quality.name or "nil")
+                        end
                         placed = placed + 1
                         break -- Only plant one seed per tile
                     end

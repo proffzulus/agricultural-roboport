@@ -1,5 +1,12 @@
 data:extend({
   {
+    type = "bool-setting",
+    name = "agricultural-roboport-enable-quality",
+    setting_type = "startup",
+    default_value = true,
+    order = "a-0"
+  },
+  {
     type = "int-setting",
     name = "agricultural-roboport-max-seeds-per-tick",
     setting_type = "runtime-global",
@@ -70,6 +77,16 @@ data:extend({
     minimum_value = 1,
     maximum_value = 1000,
     order = "g"
+  }
+  ,
+  {
+    type = "double-setting",
+    name = "agricultural-roboport-quality-proc-multiplier",
+    setting_type = "runtime-global",
+    default_value = 1.0,
+    minimum_value = 0.0,
+    maximum_value = 100.0,
+    order = "h"
   }
 })
 

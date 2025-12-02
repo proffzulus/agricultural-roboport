@@ -5,6 +5,14 @@ local UI = {}
 local helpers = helpers or require('helpers')
 local serpent = serpent or require('serpent')
 
+-- Helper to check if quality support is enabled (startup setting)
+local function is_quality_enabled()
+    if settings and settings.startup and settings.startup["agricultural-roboport-enable-quality"] then
+        return settings.startup["agricultural-roboport-enable-quality"].value
+    end
+    return true -- Default to enabled if setting not found
+end
+
 
 local function mode_to_switch_state(mode)
     if mode == -1 then return "left" end
@@ -44,7 +52,7 @@ script.on_event(defines.events.on_gui_opened, function(event)
                 seed_logistic_only = false,
                 use_filter = false,
                 filter_invert = false,
-                filters = nil,
+                filters = nil, -- Format: {{name="seed-name", quality="quality-name"}, ...}
             }
         end
         local settings = storage.agricultural_roboports[unit_key]
@@ -133,11 +141,13 @@ script.on_event(defines.events.on_gui_opened, function(event)
             caption = {"gui-inserter.blacklist"},
             style = "caption_label"
         }
-        -- Add the filter table (choose-elem-buttons)
+        -- Add the filter table (choose-elem-buttons) - now with quality support
+        -- Each filter slot has 2 rows: item selector and quality selector
         local filter_table = filter_controls_row.add{
             type = "table",
             name = "agricultural_roboport_filter_table_" .. tostring(unit_key),
-            column_count = 5
+            column_count = 5, -- 5 filter slots
+            style = "filter_slot_table"
         }
         local filters = settings.filters or {}
         -- Only support item selection for now
@@ -156,28 +166,41 @@ script.on_event(defines.events.on_gui_opened, function(event)
             end
         end
         for i = 1, 5 do
-            local val = filters[i]
-            local valid_prototype = false
-            local proto = nil
-            -- prototypes already defined above
-            if type(val) == "string" and prototypes and prototypes.item then
-                proto = prototypes.item[val]
-                if proto then
-                    valid_prototype = true
-                end
+            local filter_entry = filters[i] -- Now a table: {name="...", quality="..."}
+            local item_name = nil
+            local quality_name = nil
+            
+            -- Handle both old string format and new table format for migration
+            if type(filter_entry) == "string" then
+                item_name = filter_entry
+                quality_name = "normal" -- Default to normal quality for old saves
+            elseif type(filter_entry) == "table" then
+                item_name = filter_entry.name
+                quality_name = filter_entry.quality or "normal"
             end
-            local btn = filter_table.add{
+            
+            -- Use simple item selector if quality disabled, item-with-quality if enabled
+            local quality_enabled = is_quality_enabled()
+            local filter_btn = filter_table.add{
                 type = "choose-elem-button",
-                name = "agricultural_roboport_filter_elem_" .. tostring(unit_key) .. "_" .. tostring(i),
-                elem_type = "item",
+                name = "agricultural_roboport_filter_" .. tostring(unit_key) .. "_" .. tostring(i),
+                elem_type = quality_enabled and "item-with-quality" or "item",
                 elem_filters = {
                     {filter = "name", name = seed_names}
                 },
-                enabled = use_filter_checkbox.state -- Only enable if use_filter is checked
+                enabled = use_filter_checkbox.state,
+                style = "slot_button"
             }
-            -- Defer setting elem_value to next tick
-            if valid_prototype then
-                table.insert(_G._agroport_deferred_elem[player.index], {button=btn, value=val})
+            
+            -- Defer setting elem_value to next tick for proper initialization
+            if item_name and prototypes and prototypes.item and prototypes.item[item_name] then
+                local elem_value
+                if quality_enabled then
+                    elem_value = {name = item_name, quality = quality_name or "normal"}
+                else
+                    elem_value = item_name -- Simple string for item-only mode
+                end
+                table.insert(_G._agroport_deferred_elem[player.index], {button=filter_btn, value=elem_value})
             end
         end
         -- Set enabled state for switch and filter table based on use_filter_checkbox
@@ -308,11 +331,14 @@ script.on_event(defines.events.on_gui_checked_state_changed, function(event)
     end
 end)
 
--- Handle filter choose-elem-button
+-- Handle filter choose-elem-button (both item and quality selectors)
 script.on_event(defines.events.on_gui_elem_changed, function(event)
     local element = event.element
-    if element and element.valid and element.name:find("^agricultural_roboport_filter_elem_") then
-        local unit_key, idx = element.name:match("^agricultural_roboport_filter_elem_(.+)_(%d)$")
+    if not (element and element.valid) then return end
+    
+    -- Handle combined item-with-quality selector OR simple item selector
+    if element.name:find("^agricultural_roboport_filter_") then
+        local unit_key, idx = element.name:match("^agricultural_roboport_filter_(.+)_(%d+)$")
         if unit_key and idx then
             local num_key = tonumber(unit_key)
             if num_key then unit_key = num_key end
@@ -323,31 +349,82 @@ script.on_event(defines.events.on_gui_elem_changed, function(event)
             local settings = storage.agricultural_roboports[unit_key]
             local filters = settings.filters or {}
             if type(filters) ~= "table" then filters = {} end
-            if type(filters) == "table" and idx ~= nil then
-                filters[idx] = element.elem_value
-                -- Shift left if any value is erased (set to nil) and compress to start
-                local new_filters = {}
+            
+            local quality_enabled = is_quality_enabled()
+            
+            -- Update or create filter entry
+            if element.elem_value then
+                local item_name, quality_name
+                
+                if quality_enabled and type(element.elem_value) == "table" then
+                    -- Item-with-quality mode - elem_value is {name="item-name", quality="quality-name"}
+                    item_name = element.elem_value.name
+                    quality_name = element.elem_value.quality or "normal"
+                else
+                    -- Simple item mode - elem_value is just the item name string
+                    item_name = element.elem_value
+                    quality_name = "normal"
+                end
+                
+                -- Check if this exact item+quality combination already exists in OTHER slots
+                local is_duplicate = false
                 for i = 1, 5 do
-                    if filters[i] ~= nil then
-                        table.insert(new_filters, filters[i])
+                    if i ~= idx and filters[i] then
+                        local other_entry = filters[i]
+                        local other_name = type(other_entry) == "table" and other_entry.name or other_entry
+                        local other_quality = type(other_entry) == "table" and (other_entry.quality or "normal") or "normal"
+                        if other_name == item_name and other_quality == quality_name then
+                            is_duplicate = true
+                            break
+                        end
                     end
                 end
-                for i = #new_filters + 1, 5 do
-                    new_filters[i] = nil
+                
+                if is_duplicate then
+                    -- Reject duplicate - clear the selection
+                    element.elem_value = nil
+                    filters[idx] = nil
+                else
+                    if quality_enabled then
+                        filters[idx] = {name = item_name, quality = quality_name}
+                    else
+                        -- Store as table even in non-quality mode for consistency
+                        filters[idx] = {name = item_name, quality = "normal"}
+                    end
                 end
-                settings.filters = new_filters
-                -- Update UI: re-disable/enable buttons as needed and update their values
-                local player = game.get_player(event.player_index)
-                if player and player.valid then
-                    local filter_table = element.parent
-                    update_filter_buttons_and_compress_filters(unit_key, filter_table, settings.use_filter == true, new_filters)
-                    write_file_log("[UI] Selected filter for key=", tostring(unit_key), "index=", tostring(idx), "value=", tostring(element.elem_value))
+            else
+                -- Item cleared - remove filter entry entirely
+                filters[idx] = nil
+            end
+            
+            -- Compress filters (remove nils, shift left)
+            local new_filters = {}
+            for i = 1, 5 do
+                if filters[i] ~= nil then
+                    table.insert(new_filters, filters[i])
+                end
+            end
+            for i = #new_filters + 1, 5 do
+                new_filters[i] = nil
+            end
+            settings.filters = new_filters
+            
+            -- Update UI
+            local player = game.get_player(event.player_index)
+            if player and player.valid then
+                local filter_table = element.parent
+                update_filter_buttons_and_compress_filters(unit_key, filter_table, settings.use_filter == true, new_filters)
+                if quality_enabled and type(element.elem_value) == "table" then
+                    write_file_log("[UI] Selected filter for key=", tostring(unit_key), "index=", tostring(idx), "value=", tostring(element.elem_value and (element.elem_value.name .. "@" .. element.elem_value.quality) or "nil"))
+                else
+                    write_file_log("[UI] Selected filter for key=", tostring(unit_key), "index=", tostring(idx), "value=", tostring(element.elem_value or "nil"))
                 end
             end
         end
     end
 end)
 
+-- Handle quality dropdown selection changes
 -- Deferred elem_value setter for choose-elem-buttons
 script.on_event(defines.events.on_tick, function(event)
     if not _G._agroport_deferred_elem then return end
@@ -361,18 +438,8 @@ script.on_event(defines.events.on_tick, function(event)
     end
 end)
 
--- Helper: update filter buttons and compress filters (vanilla inserter logic)
+-- Helper: update filter buttons and compress filters with quality support
 function update_filter_buttons_and_compress_filters(unit_key, filter_table, use_filter_enabled, filters)
-    -- Get all seed names from prototypes
-    local prototypes = rawget(_G, 'prototypes')
-    local all_seed_names = {}
-    if prototypes and prototypes.item then
-        for name, proto in pairs(prototypes.item) do
-            if type(name) == "string" and name:match("%-seed$") then
-                table.insert(all_seed_names, name)
-            end
-        end
-    end
     -- Compress filters array to the start (remove nil gaps)
     local compressed_filters = {}
     for i = 1, 5 do
@@ -383,55 +450,52 @@ function update_filter_buttons_and_compress_filters(unit_key, filter_table, use_
     for i = #compressed_filters + 1, 5 do
         compressed_filters[i] = nil
     end
-    -- Assign values and unique elem_filters to buttons
+    
+    local quality_enabled = is_quality_enabled()
+    
+    -- Update each filter button with item-with-quality or simple item
     for i = 1, 5 do
-        local btn = filter_table["agricultural_roboport_filter_elem_" .. tostring(unit_key) .. "_" .. tostring(i)]
-        if btn then
-            btn.elem_value = compressed_filters[i]
-            -- Build available seeds for this button: all seeds minus those selected in other slots
-            local selected = {}
-            for j = 1, 5 do
-                if j ~= i and compressed_filters[j] then
-                    selected[compressed_filters[j]] = true
+        local filter_btn = filter_table["agricultural_roboport_filter_" .. tostring(unit_key) .. "_" .. tostring(i)]
+        if filter_btn and filter_btn.valid then
+            local filter_entry = compressed_filters[i]
+            
+            -- Set button value
+            if filter_entry and type(filter_entry) == "table" and filter_entry.name then
+                if quality_enabled then
+                    filter_btn.elem_value = {
+                        name = filter_entry.name,
+                        quality = filter_entry.quality or "normal"
+                    }
+                else
+                    filter_btn.elem_value = filter_entry.name
                 end
+            else
+                filter_btn.elem_value = nil
             end
-            local available_seeds = {}
-            for _, seed in ipairs(all_seed_names) do
-                if not selected[seed] or seed == compressed_filters[i] then
-                    table.insert(available_seeds, seed)
-                end
-            end
-            btn.elem_filters = {{filter = "name", name = available_seeds}}
         end
     end
-    -- Only the next empty button is enabled, all others are disabled except those with a value
+    
+    -- Enable/disable filter slots based on use_filter and slot status
     local first_empty = nil
-    local filter_values = {}
     for i = 1, 5 do
-        local val = compressed_filters[i]
-        filter_values[i] = val
-        if val == nil and not first_empty then
+        local filter_entry = compressed_filters[i]
+        if filter_entry == nil and not first_empty then
             first_empty = i
         end
     end
-    local enabled_log = {}
+    
     for i = 1, 5 do
-        local btn = filter_table["agricultural_roboport_filter_elem_" .. tostring(unit_key) .. "_" .. tostring(i)]
-        if btn then
+        local filter_btn = filter_table["agricultural_roboport_filter_" .. tostring(unit_key) .. "_" .. tostring(i)]
+        if filter_btn and filter_btn.valid then
             if use_filter_enabled then
-                if filter_values[i] ~= nil or i == first_empty then
-                    btn.enabled = true
-                    enabled_log[i] = true
-                else
-                    btn.enabled = false
-                    enabled_log[i] = false
-                end
+                -- Enable if has value OR is first empty slot
+                filter_btn.enabled = (compressed_filters[i] ~= nil or i == first_empty)
             else
-                btn.enabled = false
-                enabled_log[i] = false
+                filter_btn.enabled = false
             end
         end
     end
+    
     -- Save compressed filters back to settings table
     local settings = storage.agricultural_roboports[unit_key]
     settings.filters = compressed_filters

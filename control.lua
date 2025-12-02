@@ -35,6 +35,43 @@ require("scripts.UI")
 local tile_buildability = require("scripts.tile_buildability")
 require("debug-commands")
 
+-- Quality order and helpers
+local QUALITY_ORDER = { "normal", "uncommon", "rare", "epic", "legendary" }
+local QUALITY_INDEX = {}
+for i, q in ipairs(QUALITY_ORDER) do QUALITY_INDEX[q] = i end
+
+local function clamp(v, lo, hi)
+    if v < lo then return lo end
+    if v > hi then return hi end
+    return v
+end
+
+local function adjacent_quality_name(current_name, dir)
+    local idx = QUALITY_INDEX[current_name] or 1
+    local new_idx = clamp(idx + dir, 1, #QUALITY_ORDER)
+    return QUALITY_ORDER[new_idx]
+end
+
+-- Runtime-only sprite table (not persisted to storage)
+-- Maps hash_string key -> sprite_id (rendering ID)
+local quality_plant_sprites = {}
+
+-- Helper to check if quality support is enabled (startup setting)
+local function is_quality_enabled()
+    if settings and settings.startup and settings.startup["agricultural-roboport-enable-quality"] then
+        return settings.startup["agricultural-roboport-enable-quality"].value
+    end
+    return true -- Default to enabled if setting not found
+end
+
+-- Helper to count table entries
+local function table_size(t)
+    local count = 0
+    for _ in pairs(t) do count = count + 1
+    end
+    return count
+end
+
 -- TDM configuration: read from runtime-global settings (fall back to defaults)
 local DEFAULT_TDM_PERIOD = 300 -- ticks (5 seconds)
 local DEFAULT_TDM_TICK_INTERVAL = 10 -- how often (in ticks) we wake to process a batch
@@ -296,6 +333,8 @@ script.on_init(function()
     storage.virtual_seed_info = Build_virtual_seed_info()
     -- Initialize TDM storage to safe defaults
     storage._tdm = { version = 0, snapshot_version = 0, keys = {}, next_index = 1, registered_interval = nil }
+    -- Ensure quality plants storage exists for new games
+    storage.quality_plants = storage.quality_plants or {}
     -- Re-read TDM settings at runtime and register the handler now that `game` is available
     TDM_PERIOD, TDM_TICK_INTERVAL = read_tdm_settings()
     register_tdm_handler(TDM_TICK_INTERVAL)
@@ -319,6 +358,67 @@ script.on_load(function()
     TDM_PERIOD, TDM_TICK_INTERVAL = read_tdm_settings()
     register_tdm_handler(TDM_TICK_INTERVAL)
     -- Do NOT modify storage.virtual_seed_info or storage._tdm here; on_load must not mutate storage
+    -- Schedule recreation of quality sprites on the next tick (don't mutate storage during on_load)
+    script.on_event(defines.events.on_tick, function(event)
+        -- Unregister this one-shot handler immediately
+        script.on_event(defines.events.on_tick, nil)
+        
+        -- Skip quality sprite recreation if disabled
+        if not is_quality_enabled() then return end
+        
+        -- Recreate sprites from persistent quality_plants storage
+        -- Sprites use only_in_alt_mode flag, so they automatically show/hide
+        if not storage.quality_plants then return end
+        
+        if write_file_log then write_file_log("[QUALITY] on_load: Recreating sprites for", table_size(storage.quality_plants), "quality plants") end
+        
+        for key, data in pairs(storage.quality_plants) do
+            if data and data.quality then
+                local surface_name, fx, fy = key:match("^([^:]+):(-?%d+),(-?%d+)$")
+                if not surface_name then goto continue_end end
+                local surface = game and game.surfaces and game.surfaces[surface_name]
+                if not surface then goto continue_end end
+                
+                local x_min = tonumber(fx) * 2
+                local y_min = tonumber(fy) * 2
+                local area = {{x_min - 0.5, y_min - 0.5}, {x_min + 2.5, y_min + 2.5}}
+                local ents = surface.find_entities_filtered{ area = area, type = "plant" }
+                local plant = ents and ents[1]
+                
+                if plant and plant.valid then
+                    local qname = nil
+                    if type(data.quality) == "table" or type(data.quality) == "userdata" then 
+                        qname = data.quality.name 
+                    elseif type(data.quality) == "string" then 
+                        qname = data.quality 
+                    end
+                    
+                    if qname and qname ~= "normal" then
+                        local ok, sprite_id = pcall(function()
+                            return rendering.draw_sprite{
+                                sprite = "quality." .. qname,
+                                target = plant,
+                                surface = surface,
+                                target_offset = {0.0, 0.0},
+                                x_scale = 0.5,
+                                y_scale = 0.5,
+                                render_layer = "light-effect",
+                                only_in_alt_mode = true
+                            }
+                        end)
+                        
+                        if ok and sprite_id then 
+                            quality_plant_sprites[key] = sprite_id
+                            if write_file_log then write_file_log("[QUALITY] on_load: Recreated sprite for key=", key, "sprite=", sprite_id) end
+                        end
+                    end
+                end
+                ::continue_end::
+            end
+        end
+        
+        if write_file_log then write_file_log("[QUALITY] on_load: Sprite recreation complete, total sprites=", table_size(quality_plant_sprites)) end
+    end)
     write_file_log("=== on_load() COMPLETE ===")
 end)
 
@@ -326,12 +426,215 @@ end)
 -- Handler functions region
 -- =====================
 
+-- Quality-plant runtime registry (inspired by quality-trees mod)
+local function hash_string(x, y, surface_name)
+    return surface_name .. ":" .. math.floor(x / 2) .. "," .. math.floor(y / 2)
+end
+
+local function register_plant(plant, quality)
+    -- Skip quality tracking if disabled
+    if not is_quality_enabled() then return end
+    
+    storage.quality_plants = storage.quality_plants or {}
+
+    -- Don't store 'normal' quality plants (no badge needed)
+    -- Quality can be either a table or userdata (LuaQualityPrototype)
+    if not quality then 
+		if write_file_log then write_file_log("[QUALITY] register_plant: quality is nil, skipping registration for plant=", plant.name, "pos=", serpent and serpent.line and serpent.line(plant.position) or tostring(plant.position)) end
+		return 
+	end
+	
+    -- Accept both table and userdata (LuaQualityPrototype is userdata in Factorio)
+    local qtype = type(quality)
+    if qtype ~= "table" and qtype ~= "userdata" then 
+		if write_file_log then write_file_log("[QUALITY] register_plant: quality is neither table nor userdata, skipping registration for plant=", plant.name, "pos=", serpent and serpent.line and serpent.line(plant.position) or tostring(plant.position), "quality=", tostring(quality), "type=", qtype) end
+		return 
+	end
+	
+    -- Check quality level (skip normal quality with level 0)
+    if not quality.level or quality.level == 0 then 
+		if write_file_log then write_file_log("[QUALITY] register_plant: quality level is nil or 0 (normal quality), skipping registration for plant=", plant.name, "pos=", serpent and serpent.line and serpent.line(plant.position) or tostring(plant.position), "quality.level=", tostring(quality.level), "quality.name=", tostring(quality.name)) end
+		return 
+	end
+	
+    if not quality.name then 
+		if write_file_log then write_file_log("[QUALITY] register_plant: quality name is nil, skipping registration for plant=", plant.name, "pos=", serpent and serpent.line and serpent.line(plant.position) or tostring(plant.position), "quality.level=", tostring(quality.level)) end
+		return 
+	end
+
+    local key = hash_string(plant.position.x, plant.position.y, plant.surface.name)
+    
+    -- Store plant quality in persistent storage (without sprite)
+    if not storage.quality_plants then storage.quality_plants = {} end
+    storage.quality_plants[key] = { quality = quality }
+    
+    -- Create sprite with only_in_alt_mode flag (automatically handles visibility)
+    local ok, sprite_id = pcall(function()
+        return rendering.draw_sprite{
+            sprite = "quality." .. quality.name,
+            target = plant,
+            surface = plant.surface,
+            target_offset = {0.0, 0.0},
+            x_scale = 0.5,
+            y_scale = 0.5,
+            render_layer = "light-effect",
+            only_in_alt_mode = true
+        }
+    end)
+    
+    if ok and sprite_id then
+        quality_plant_sprites[key] = sprite_id
+        if write_file_log then write_file_log("[QUALITY] Registered plant with sprite:", plant.name, "key=", key, "quality=", quality.name, "sprite=", sprite_id) end
+    else
+        if write_file_log then write_file_log("[QUALITY] Registered plant (sprite creation failed):", plant.name, "key=", key, "quality=", quality.name) end
+    end
+end
+
+local function harvest_plant(plant, inv_buffer)
+    -- Skip quality tracking if disabled
+    if not is_quality_enabled() then return end
+    
+    storage.quality_plants = storage.quality_plants or {}
+    local key = hash_string(plant.position.x, plant.position.y, plant.surface.name)
+    local plant_quality_data = storage.quality_plants[key]
+    if write_file_log then write_file_log("[QUALITY] harvest_plant called:", "plant=", plant.name, "pos=", serpent and serpent.line and serpent.line(plant.position) or tostring(plant.position), "key=", key, "has_registry=", tostring(plant_quality_data ~= nil)) end
+    
+    local harvest_quality = nil
+    if plant_quality_data then
+        -- Destroy sprite from runtime table if it exists
+        local sprite_id = quality_plant_sprites[key]
+        if sprite_id then
+            pcall(function() rendering.destroy(sprite_id) end)
+            quality_plant_sprites[key] = nil
+            if write_file_log then write_file_log("[QUALITY] Destroyed sprite for harvest:", "key=", key, "sprite=", sprite_id) end
+        end
+        
+        harvest_quality = plant_quality_data.quality
+        storage.quality_plants[key] = nil
+        if write_file_log then write_file_log("[QUALITY] Harvesting plant with stored quality:", plant.name, "key=", key, "quality=", harvest_quality and harvest_quality.name or tostring(harvest_quality)) end
+    end
+
+    -- If plant had no stored quality, we may still roll a deterministic per-plant proc
+    local final_quality = nil
+    local had_registry = (plant_quality_data ~= nil)
+    if had_registry then
+        final_quality = harvest_quality
+    else
+        -- If plant entity has a runtime quality (rare), use it
+        if plant.quality and plant.quality.name and plant.quality.name ~= "normal" then
+            final_quality = plant.quality
+        end
+    end
+
+    -- If final_quality is nil or normal, consider per-plant proc to mutate quality
+    local function get_proc_multiplier()
+        if settings and settings.global and settings.global["agricultural-roboport-quality-proc-multiplier"] then
+            return settings.global["agricultural-roboport-quality-proc-multiplier"].value or 1.0
+        end
+        return 1.0
+    end
+
+    local mutated = false
+    local qname = (type(final_quality) == "table" and final_quality.name) or final_quality or "normal"
+
+    -- Allow deterministic per-plant proc for any quality (not just "normal").
+    local base_chance = 0.005 -- 0.5%
+    local chance = base_chance * get_proc_multiplier()
+	if write_file_log then write_file_log("[QUALITY] Base proc chance:", base_chance, "multiplier=", get_proc_multiplier(), "final chance=", chance, "current quality=", qname) end
+    if chance > 0 then
+        if write_file_log then write_file_log("[QUALITY] Rolling for quality mutation (math.random):", "chance=", chance, "current quality=", qname) end
+        -- Use math.random for sampling (simpler, server-controlled in multiplayer)
+        local sample = math.random()
+        if write_file_log then write_file_log("[QUALITY] Proc roll (math.random): chance=", chance, "sample=", sample, "current=", qname) end
+        if sample < chance then
+            local dir_sample = math.random()
+            local dir = (dir_sample < 0.33) and -1 or 1
+            if write_file_log then write_file_log("[QUALITY] Direction roll (math.random): sample=", dir_sample, "dir=", dir) end
+            local cur = qname or "normal"
+            local new_q = adjacent_quality_name(cur, dir)
+            if new_q ~= cur then
+                final_quality = new_q
+                mutated = true
+            end
+            if write_file_log then write_file_log("[QUALITY] RNG SUMMARY (math.random):", "chance=", chance, "sample=", sample, "dir_sample=", dir_sample, "dir=", dir, "current=", cur, "new=", new_q, "mutated=", tostring(mutated)) end
+        end
+    end
+
+    -- If there's no resulting quality to apply, do nothing
+    local final_qname = (type(final_quality) == "table" and final_quality.name) or final_quality
+    if (not final_qname) or final_qname == "normal" then
+        return
+    end
+
+    -- Proceed to swap inventory stacks to final_qname
+    harvest_quality = final_qname
+    if write_file_log then write_file_log("[QUALITY] Applying final quality for harvest:", harvest_quality, "mutated=", mutated, "had_registry=", tostring(had_registry)) end
+
+    if inv_buffer then
+        -- (inventory swap logic follows; reuse earlier code path)
+        local ok_list, size = pcall(function() return #inv_buffer end)
+        if write_file_log then write_file_log("[QUALITY] Inventory size (read attempt):", ok_list and size or "err") end
+        local to_replace = {}
+        local ok_iter = pcall(function()
+            for i = 1, #inv_buffer do
+                local stack = inv_buffer[i]
+                if stack and stack.valid_for_read then
+                    to_replace[#to_replace+1] = { name = stack.name, count = stack.count }
+                    if write_file_log then write_file_log("[QUALITY] Buffer before: idx=", i, "name=", stack.name, "count=", stack.count, "quality=", stack.quality and stack.quality.name or "nil") end
+                end
+            end
+        end)
+        if not ok_iter and write_file_log then write_file_log("[QUALITY] Failed to iterate inv_buffer") end
+        for _, entry in ipairs(to_replace) do
+            pcall(function()
+                local removed = inv_buffer.remove{ name = entry.name, count = entry.count }
+                if write_file_log then write_file_log("[QUALITY] Removed from buffer:", entry.name, "requested=", entry.count, "removed=", removed) end
+                if removed and removed > 0 then
+                    local qval = harvest_quality
+                    local insert_ok, inserted_or_err = pcall(function()
+                        return inv_buffer.insert{ name = entry.name, count = removed, quality = qval }
+                    end)
+                    if write_file_log then
+                        if insert_ok then
+                            write_file_log("[QUALITY] Inserted into buffer with quality:", entry.name, "count=", inserted_or_err, "quality=", qval or "nil")
+                        else
+                            write_file_log("[QUALITY] Insert FAILED for:", entry.name, "error=", tostring(inserted_or_err), "quality=", tostring(qval))
+                        end
+                    end
+                end
+            end)
+        end
+    else
+        if write_file_log then write_file_log("[QUALITY] No inv_buffer provided for plant harvest at key=", key) end
+    end
+end
+
+
 local function on_robot_built_virtual_seed(event)
     local entity = event.entity
     if entity.name:match("^virtual%-.+%-seed$") then
         local surface = entity.surface
         local position = entity.position
         local seed_name = entity.name:match("^virtual%-(.+%-seed)$")
+        
+        -- Debug: Log all event properties
+        if write_file_log then
+            write_file_log("[ROBOT DEBUG] Event properties:")
+            write_file_log("  entity.name:", entity.name)
+            write_file_log("  entity.quality:", entity.quality and entity.quality.name or "nil")
+            write_file_log("  event.item:", event.item and (event.item.name or "has item object") or "nil")
+            if event.item then
+                write_file_log("  event.item.name:", event.item.name or "nil")
+                write_file_log("  event.item.quality:", event.item.quality or "nil")
+            end
+            write_file_log("  event.stack:", event.stack and "has stack" or "nil")
+            if event.stack then
+                write_file_log("  event.stack.name:", event.stack.name or "nil")
+                write_file_log("  event.stack.quality:", event.stack.quality and event.stack.quality.name or "nil")
+            end
+            write_file_log("  event.tags:", event.tags and serpent.block(event.tags) or "nil")
+        end
+        
         local plant_result = nil
         if seed_name and prototypes.item[seed_name] then
             plant_result = prototypes.item[seed_name].place_result or prototypes.item[seed_name].plant_result
@@ -341,11 +644,33 @@ local function on_robot_built_virtual_seed(event)
             plant_result_name = plant_result.name
         end
         if plant_result_name and prototypes.entity[plant_result_name] then
-            surface.create_entity{
+            -- Get quality from the item that was consumed by the robot (keep as object)
+            local quality = nil
+            if event.stack and event.stack.quality then
+                quality = event.stack.quality
+            elseif event.item and event.item.quality then
+                quality = event.item.quality
+            end
+            
+            if write_file_log then
+                write_file_log("[ROBOT] Building tree:", plant_result_name, "quality:", quality and quality.name or "normal", "from virtual:", entity.name)
+            end
+            
+            local created_tree = surface.create_entity{
                 name = plant_result_name,
                 position = position,
-                force = entity.force
+                force = entity.force,
+                quality = quality
             }
+            
+            if write_file_log and created_tree then
+                write_file_log("[ROBOT] Created tree:", created_tree.name, "actual quality:", created_tree.quality and created_tree.quality.name or "nil", "valid:", tostring(created_tree.valid))
+            end
+            -- Register plant quality in runtime registry (so we can preserve quality on harvest)
+            if created_tree and created_tree.valid then
+                pcall(function() register_plant(created_tree, quality) end)
+            end
+            
             entity.destroy()
         end
     end
@@ -520,6 +845,19 @@ local function on_built_event_handler(event)
             tdm_mark_dirty()
         end
         return
+    end
+
+    -- If a real plant was placed (player/script/tower), register its quality
+    if entity.type == "plant" then
+        local plant_quality = nil
+        if event and event.stack and event.stack.quality then
+            plant_quality = event.stack.quality
+        elseif event and event.item and event.item.quality then
+            plant_quality = event.item.quality
+        elseif entity.quality and entity.quality.name then
+            plant_quality = entity.quality
+        end
+        pcall(function() register_plant(entity, plant_quality) end)
     end
     
     -- Handle agricultural roboport entities
@@ -738,12 +1076,48 @@ script.on_event(defines.events.script_raised_built, on_script_raised_built_entit
 
 script.on_event(defines.events.on_built_entity, on_built_event_handler, {{filter = "name", mode="or", name = "entity-ghost"}, {filter = "name", mode="or", name = "agricultural-roboport"}})
 
-script.on_event({defines.events.on_entity_died, defines.events.on_player_mined_entity, defines.events.on_robot_mined_entity}, on_remove_agricultural_roboport)
+-- Combined dispatch: handle roboport removal and plant harvests without overwriting other handlers
+local function on_entity_removed_dispatch(event)
+    -- Keep existing roboport removal behavior
+    pcall(function() on_remove_agricultural_roboport(event) end)
+    -- If a plant was removed/mined, attempt to apply stored quality to the harvest buffer
+    if event and event.entity and event.entity.valid and event.entity.type == "plant" then
+        local inv_buffer = event.buffer
+		if write_file_log then
+			write_file_log("[QUALITY] on_entity_removed_dispatch: entity=", event.entity.name, " buffer=", tostring(inv_buffer ~= nil), "robot=", tostring(event.robot ~= nil))
+		end
+        -- Robots may not provide `event.buffer`; if a robot did the mining, use its cargo inventory
+        if (not inv_buffer) and event.robot and event.robot.valid then
+            local ok, inv = pcall(function() return event.robot.get_inventory(defines.inventory.robot_cargo) end)
+            if ok then inv_buffer = inv end
+        end
+        pcall(function() harvest_plant(event.entity, inv_buffer) end)
+    end
+end
+
+script.on_event({defines.events.on_entity_died, defines.events.on_player_mined_entity, defines.events.on_robot_mined_entity}, on_entity_removed_dispatch)
 
 script.on_event(defines.events.on_robot_built_entity, on_robot_built_entity_dispatch)
 script.on_event(defines.events.on_entity_settings_pasted, on_entity_settings_pasted)
 
 script.on_event(defines.events.on_player_setup_blueprint, on_player_setup_blueprint)
+
+-- Register tower/tile planting and tower-mined events so our quality registry stays in sync
+script.on_event(defines.events.on_tower_planted_seed, function(event)
+    if event and event.plant and event.seed then
+		if write_file_log then
+			write_file_log("[QUALITY] on_tower_planted_seed: plant=", event.plant.name, "seed quality=", event.seed.quality and event.seed.quality.name or "nil", "quality level=", event.seed.quality and event.seed.quality.level or "nil")
+		end
+        pcall(function() register_plant(event.plant, event.seed.quality) end)
+		
+    end
+end)
+
+script.on_event(defines.events.on_tower_mined_plant, function(event)
+    if event and event.plant then
+        pcall(function() harvest_plant(event.plant, event.buffer) end)
+    end
+end)
 
 script.on_configuration_changed(function()
     if not storage.virtual_seed_info then

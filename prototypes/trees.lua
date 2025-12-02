@@ -35,7 +35,7 @@ for seed_name, seed_item in pairs(data.raw.item or {}) do
                 },
             }
         }
-        base.placeable_by = {item = seed_name, count = 1}
+        base.placeable_by = {item = seed_name, count = 1, quality = "any"}
         base.tile_width = 3
         base.tile_height = 3
         base.collision_box = {{-0.9, -0.9}, {0.9, 0.9}}
