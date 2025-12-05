@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.1.1
+Date: 2025-12-05
+  Bugfixes:
+    - Fixed quality mutation not properly extracting quality name from LuaQualityPrototype objects
+    - Fixed manual planting not preserving quality from seeds (now uses consumed_items data)
+  Changes:
+    - Added "Chance of quality improvement" setting (0-100%, default 10%) to control upgrade vs downgrade probability for quality mutations
+    - Increased maximum quality mutation multiplier from 100 to 200
+---------------------------------------------------------------------------------------------------
 Version: 1.1.0
 Date: 2025-12-02
   Major Features:

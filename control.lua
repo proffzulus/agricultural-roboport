@@ -36,20 +36,30 @@ local tile_buildability = require("scripts.tile_buildability")
 require("debug-commands")
 
 -- Quality order and helpers
-local QUALITY_ORDER = { "normal", "uncommon", "rare", "epic", "legendary" }
-local QUALITY_INDEX = {}
-for i, q in ipairs(QUALITY_ORDER) do QUALITY_INDEX[q] = i end
+local QUALITY_BY_LEVEL = {
+	[0] = "normal",
+	[1] = "uncommon",
+	[2] = "rare",
+	[3] = "epic",
+	[4] = "legendary"
+}
+local QUALITY_LEVEL = {}
+local MAX_QUALITY_LEVEL = 0
+for lvl, name in pairs(QUALITY_BY_LEVEL) do
+	QUALITY_LEVEL[name] = lvl
+	if lvl > MAX_QUALITY_LEVEL then MAX_QUALITY_LEVEL = lvl end
+end
 
 local function clamp(v, lo, hi)
-    if v < lo then return lo end
-    if v > hi then return hi end
-    return v
+	if v < lo then return lo end
+	if v > hi then return hi end
+	return v
 end
 
 local function adjacent_quality_name(current_name, dir)
-    local idx = QUALITY_INDEX[current_name] or 1
-    local new_idx = clamp(idx + dir, 1, #QUALITY_ORDER)
-    return QUALITY_ORDER[new_idx]
+	local idx = QUALITY_LEVEL[current_name] or 0
+	local new_idx = clamp(idx + dir, 0, MAX_QUALITY_LEVEL)
+	return QUALITY_BY_LEVEL[new_idx]
 end
 
 -- Runtime-only sprite table (not persisted to storage)
@@ -535,7 +545,7 @@ local function harvest_plant(plant, inv_buffer)
     end
 
     local mutated = false
-    local qname = (type(final_quality) == "table" and final_quality.name) or final_quality or "normal"
+    local qname = (type(final_quality) == "table" or type(final_quality) == "userdata") and final_quality.name or (type(final_quality) == "string" and final_quality or "normal")
 
     -- Allow deterministic per-plant proc for any quality (not just "normal").
     local base_chance = 0.005 -- 0.5%
@@ -548,9 +558,21 @@ local function harvest_plant(plant, inv_buffer)
         if write_file_log then write_file_log("[QUALITY] Proc roll (math.random): chance=", chance, "sample=", sample, "current=", qname) end
         if sample < chance then
             local dir_sample = math.random()
-            local dir = (dir_sample < 0.33) and -1 or 1
+            -- Extract level from final_quality (handle userdata/table)
+            local quality_level = 0
+            if type(final_quality) == "table" or type(final_quality) == "userdata" then
+                quality_level = final_quality.level or 0
+            end
+            -- Get quality improvement chance from settings (0-100%)
+            local improvement_chance = 0.1 -- default 10%
+            if settings and settings.global and settings.global["agricultural-roboport-quality-improvement-chance"] then
+                improvement_chance = settings.global["agricultural-roboport-quality-improvement-chance"].value / 100.0
+            end
+            local adjusted_chance = improvement_chance - (quality_level * 0.01)
+			if write_file_log then write_file_log("[QUALITY] Direction roll (math.random): dir_sample=", dir_sample, "Probing against level adjustment of", adjusted_chance) end
+            local dir = (dir_sample < adjusted_chance) and 1 or -1
             if write_file_log then write_file_log("[QUALITY] Direction roll (math.random): sample=", dir_sample, "dir=", dir) end
-            local cur = qname or "normal"
+            local cur = qname
             local new_q = adjacent_quality_name(cur, dir)
             if new_q ~= cur then
                 final_quality = new_q
@@ -779,6 +801,7 @@ local function copy_roboport_settings(source_key, dest_key)
 end
 
 local function on_built_event_handler(event)
+	
     local entity = event.created_entity or event.entity
     if not entity then return end
     
@@ -796,11 +819,18 @@ local function on_built_event_handler(event)
     
     -- Extended logging to diagnose quality roboport issues
     local entity_type = entity.type or "unknown"
+	local consumed_item = event.consumed_items and event.consumed_items[1] and event.consumed_items[1]
     local entity_quality = entity.quality and entity.quality.name or "nil"
     local has_tags = event.tags ~= nil
     local entity_tags = entity.tags
     local unit_number = entity.unit_number or "nil"
     
+	if (consumed_item) then 
+		write_file_log("[Event] Consumed item", 
+			"name=", tostring(consumed_item.name or "nil"),
+			"quality=", consumed_item.quality and consumed_item.quality.name or "nil",
+			"count=", tostring(consumed_item.count or "nil"))
+	end
     write_file_log("[Event] Built entity", 
         "name=", tostring(entity.name),
         "type=", entity_type,
@@ -850,12 +880,25 @@ local function on_built_event_handler(event)
     -- If a real plant was placed (player/script/tower), register its quality
     if entity.type == "plant" then
         local plant_quality = nil
-        if event and event.stack and event.stack.quality then
-            plant_quality = event.stack.quality
-        elseif event and event.item and event.item.quality then
-            plant_quality = event.item.quality
-        elseif entity.quality and entity.quality.name then
-            plant_quality = entity.quality
+        -- Check consumed_items first (manual planting with quality items)
+        if event and event.consumed_items and event.consumed_items[1] then
+            local consumed_item = event.consumed_items[1]
+            if consumed_item.quality then
+                plant_quality = consumed_item.quality
+                if write_file_log then 
+                    write_file_log("[QUALITY] Using quality from consumed_item:", consumed_item.name, "quality=", consumed_item.quality.name) 
+                end
+            end
+        end
+        -- Fallback to other sources if consumed_items didn't have quality
+        if not plant_quality then
+            if event and event.stack and event.stack.quality then
+                plant_quality = event.stack.quality
+            elseif event and event.item and event.item.quality then
+                plant_quality = event.item.quality
+            elseif entity.quality and entity.quality.name and entity.quality.name ~= "normal" then
+                plant_quality = entity.quality
+            end
         end
         pcall(function() register_plant(entity, plant_quality) end)
     end
@@ -1074,7 +1117,7 @@ end)
 
 script.on_event(defines.events.script_raised_built, on_script_raised_built_entity_dispatch)
 
-script.on_event(defines.events.on_built_entity, on_built_event_handler, {{filter = "name", mode="or", name = "entity-ghost"}, {filter = "name", mode="or", name = "agricultural-roboport"}})
+script.on_event(defines.events.on_built_entity, on_built_event_handler, {{filter = "name", mode="or", name = "entity-ghost"}, {filter = "name", mode="or", name = "agricultural-roboport"}, {filter="type", mode="or", type="plant"}})
 
 -- Combined dispatch: handle roboport removal and plant harvests without overwriting other handlers
 local function on_entity_removed_dispatch(event)

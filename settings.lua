@@ -85,8 +85,17 @@ data:extend({
     setting_type = "runtime-global",
     default_value = 1.0,
     minimum_value = 0.0,
-    maximum_value = 100.0,
+    maximum_value = 200.0,
     order = "h"
+  },
+  {
+    type = "int-setting",
+    name = "agricultural-roboport-quality-improvement-chance",
+    setting_type = "runtime-global",
+    default_value = 10,
+    minimum_value = 0,
+    maximum_value = 100,
+    order = "h-1"
   }
 })
 
