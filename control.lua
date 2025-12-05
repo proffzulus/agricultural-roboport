@@ -819,18 +819,12 @@ local function on_built_event_handler(event)
     
     -- Extended logging to diagnose quality roboport issues
     local entity_type = entity.type or "unknown"
-	local consumed_item = event.consumed_items and event.consumed_items[1] and event.consumed_items[1]
+	
     local entity_quality = entity.quality and entity.quality.name or "nil"
     local has_tags = event.tags ~= nil
     local entity_tags = entity.tags
     local unit_number = entity.unit_number or "nil"
     
-	if (consumed_item) then 
-		write_file_log("[Event] Consumed item", 
-			"name=", tostring(consumed_item.name or "nil"),
-			"quality=", consumed_item.quality and consumed_item.quality.name or "nil",
-			"count=", tostring(consumed_item.count or "nil"))
-	end
     write_file_log("[Event] Built entity", 
         "name=", tostring(entity.name),
         "type=", entity_type,
@@ -881,9 +875,10 @@ local function on_built_event_handler(event)
     if entity.type == "plant" then
         local plant_quality = nil
         -- Check consumed_items first (manual planting with quality items)
-        if event and event.consumed_items and event.consumed_items[1] then
+        
+		if event and event.consumed_items and not event.consumed_items.is_empty() then
             local consumed_item = event.consumed_items[1]
-            if consumed_item.quality then
+            if consumed_item and consumed_item.quality then
                 plant_quality = consumed_item.quality
                 if write_file_log then 
                     write_file_log("[QUALITY] Using quality from consumed_item:", consumed_item.name, "quality=", consumed_item.quality.name) 
