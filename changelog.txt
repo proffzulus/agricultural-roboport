@@ -1,4 +1,9 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.1.3
+Date: 2025-12-06
+  Bugfixes:
+    - Fixed map_generator_bounding_box property being less than collision_box which caused game crash in conjunction with some mods.
+---------------------------------------------------------------------------------------------------
 Version: 1.1.2
 Date: 2025-12-05
   Bugfixes:
