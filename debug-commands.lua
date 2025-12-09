@@ -107,3 +107,47 @@ commands.add_command("agro-roboports-dump", "Dump agricultural_roboports storage
     end
 end)
 
+commands.add_command("agro-rebuild-seed-info", "Rebuild virtual_seed_info storage", function(event)
+    local player = game.get_player(event.player_index)
+    if not player then return end
+    
+    player.print("[color=yellow]Rebuilding virtual_seed_info...[/color]")
+    
+    -- Clear existing info
+    storage.virtual_seed_info = nil
+    
+    -- Rebuild using the Build_virtual_seed_info function
+    if Build_virtual_seed_info then
+        storage.virtual_seed_info = Build_virtual_seed_info()
+        
+        -- Count entries
+        local count = 0
+        if storage.virtual_seed_info then
+            for _ in pairs(storage.virtual_seed_info) do
+                count = count + 1
+            end
+        end
+        
+        player.print(string.format("[color=green]Rebuilt virtual_seed_info with %d entries[/color]", count))
+        
+        -- Show sample entries
+        if count > 0 then
+            player.print("\n=== Sample Entries ===")
+            local shown = 0
+            for seed_name, info in pairs(storage.virtual_seed_info) do
+                if shown < 5 then
+                    player.print(string.format("  %s: plant=%s has_tile_restriction=%s",
+                        seed_name,
+                        info.plant_proto and info.plant_proto.name or "nil",
+                        tostring(info.tile_restriction ~= nil)))
+                    shown = shown + 1
+                end
+            end
+            if count > 5 then
+                player.print(string.format("  ... and %d more", count - 5))
+            end
+        end
+    else
+        player.print("[color=red]Build_virtual_seed_info function not found![/color]")
+    end
+end)

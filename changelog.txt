@@ -1,4 +1,24 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.2.0
+Date: 2025-12-09
+  Major Features:
+    - Added support for non-standard seed items from other mods (e.g., boompuff-spore from Space Exploration)
+    - Added startup setting 'agricultural-roboport-additional-seeds' to specify custom seed items by name
+    - Virtual seed entities now created for items with plant_result in multiple categories (item, capsule, ammo, tool)
+    - Custom seeds automatically appear in filter dropdowns and work with all roboport features
+  Changes:
+    - Blacklist filter mode now works at item level (quality-agnostic) - blocking an item blocks all qualities
+    - Whitelist filter mode continues to support per-quality filtering
+    - UI dynamically switches between item and item-with-quality selectors based on filter mode
+    - Virtual seed info now rebuilt on every game load and mod configuration change for consistency
+  Bugfixes:
+    - Fixed filter UI crashes when switching between whitelist and blacklist modes
+    - Fixed seeding logic to use prototype introspection instead of string pattern matching
+    - Fixed virtual seed info indexing to use actual seed item names
+  Compatibility:
+    - Now compatible with mods adding custom agricultural items (e.g., Boompuff Agriculture)
+    - Supports any item with plant_result regardless of naming convention
+---------------------------------------------------------------------------------------------------
 Version: 1.1.3
 Date: 2025-12-06
   Bugfixes:

@@ -55,28 +55,23 @@ function seed(roboport, seed_logistic_only)
     end
 
     local whitelist = {} -- Format: {["item-name"] = {quality1=true, quality2=true, ...}}
-    local blacklist = {} -- Format: {["item-name"] = {quality1=true, quality2=true, ...}}
+    local blacklist = {} -- Format: {["item-name"] = true} (quality ignored for blacklist)
     if use_filter then
         if filter_invert then
+            -- Blacklist mode: store item names only, ignore quality
             for _, filter_entry in ipairs(filters) do
                 if filter_entry then
                     local item_name = nil
-                    local quality_name = "normal"
                     
                     -- Support both old string format and new table format
                     if type(filter_entry) == "string" then
                         item_name = filter_entry
-                        quality_name = "normal"
                     elseif type(filter_entry) == "table" and filter_entry.name then
                         item_name = filter_entry.name
-                        quality_name = filter_entry.quality or "normal"
                     end
                     
                     if item_name then
-                        if not blacklist[item_name] then
-                            blacklist[item_name] = {}
-                        end
-                        blacklist[item_name][quality_name] = true
+                        blacklist[item_name] = true
                     end
                 end
             end
@@ -172,18 +167,16 @@ function seed(roboport, seed_logistic_only)
                 
                 for seed_name, seed_item in pairs(prototypes.item) do
                     if seed_name:match("%-seed$") and seed_item.plant_result then
-                        if has_qualities then
-                            -- For each seed, add all available qualities
-                            for quality_name, _ in pairs(prototypes_qual) do
-                                local is_blacklisted = use_filter and filter_invert and blacklist[seed_name] and blacklist[seed_name][quality_name]
-                                if not is_blacklisted then
+                        -- Blacklist check: if item is blacklisted, skip ALL qualities
+                        local is_blacklisted = use_filter and filter_invert and blacklist[seed_name]
+                        if not is_blacklisted then
+                            if has_qualities then
+                                -- For each seed, add all available qualities
+                                for quality_name, _ in pairs(prototypes_qual) do
                                     table.insert(candidate_seeds, {name = seed_name, quality = quality_name})
                                 end
-                            end
-                        else
-                            -- No qualities system OR quality disabled, just use normal quality
-                            local is_blacklisted = use_filter and filter_invert and blacklist[seed_name] and blacklist[seed_name]["normal"]
-                            if not is_blacklisted then
+                            else
+                                -- No qualities system OR quality disabled, just use normal quality
                                 table.insert(candidate_seeds, {name = seed_name, quality = "normal"})
                             end
                         end
@@ -197,7 +190,15 @@ function seed(roboport, seed_logistic_only)
                 local seed_item = prototypes.item[seed_name]
                 local plant_ref = seed_item and seed_item.plant_result
                 if not check_surface_conditions(plant_ref, surface) then goto continue end
-                local virtual_seed_name = "virtual-" .. seed_name
+                
+                -- Determine virtual seed name: standard seeds keep their name, non-standard get "-seed" appended
+                local virtual_seed_name
+                if seed_name:match("%-seed$") then
+                    virtual_seed_name = "virtual-" .. seed_name
+                else
+                    virtual_seed_name = "virtual-" .. seed_name .. "-seed"
+                end
+                
                 if plant_ref and prototypes.entity[virtual_seed_name] then
                     local info = virtual_seed_info[seed_name] or {}
                     local restrictions = info.tile_restriction or nil

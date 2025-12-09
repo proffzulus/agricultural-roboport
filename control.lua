@@ -287,43 +287,53 @@ end
 function Build_virtual_seed_info()
     local info = {}
     if write_file_log then 
-        write_file_log("Build_virtual_seed_info:start", "scanning all seed items")
+        write_file_log("Build_virtual_seed_info:start", "scanning all virtual seed entities")
     end
     
-    for seed_name, seed_item in pairs(prototypes.item) do
-        if seed_name:match("%-seed$") then
-            local plant_result = seed_item.place_result or seed_item.plant_result
-            local plant_name = (type(plant_result) == "table" or type(plant_result) == "userdata") and plant_result.name or plant_result
-            local plant_proto = plant_name and prototypes.entity[plant_name]
-            
-            if write_file_log then
-                write_file_log("Build_virtual_seed_info:processing", 
-                    "seed=", seed_name, 
-                    "plant_name=", plant_name or "nil",
-                    "plant_proto=", plant_proto and plant_proto.name or "nil")
-            end
-            
-            -- Safely read autoplace/autoplace_specification.tile_restriction (some prototypes may omit keys)
-            local restrictions = nil
-            local tile_buildability_rules = nil
-            if plant_proto then
-                local ok, spec = pcall(function() return plant_proto.autoplace_specification end)
-                if ok and spec and spec.tile_restriction then
-                    restrictions = spec.tile_restriction
-                else
-                    local ok2, ap = pcall(function() return plant_proto.autoplace end)
-                    if ok2 and ap and ap.tile_restriction then
-                        restrictions = ap.tile_restriction
+    -- Scan all virtual-*-seed entities to build info by their placeable items
+    for entity_name, entity_proto in pairs(prototypes.entity) do
+        if entity_name:match("^virtual%-.+%-seed$") then
+            -- Get the actual seed item from items_to_place_this
+            if entity_proto.items_to_place_this and #entity_proto.items_to_place_this > 0 then
+                local seed_name = entity_proto.items_to_place_this[1].name
+                local seed_item = prototypes.item[seed_name]
+                
+                if seed_item then
+                    local plant_result = seed_item.place_result or seed_item.plant_result
+                    local plant_name = (type(plant_result) == "table" or type(plant_result) == "userdata") and plant_result.name or plant_result
+                    local plant_proto = plant_name and prototypes.entity[plant_name]
+                    
+                    if write_file_log then
+                        write_file_log("Build_virtual_seed_info:processing", 
+                            "virtual_entity=", entity_name,
+                            "seed=", seed_name, 
+                            "plant_name=", plant_name or "nil",
+                            "plant_proto=", plant_proto and plant_proto.name or "nil")
                     end
+                    
+                    -- Safely read autoplace/autoplace_specification.tile_restriction (some prototypes may omit keys)
+                    local restrictions = nil
+                    local tile_buildability_rules = nil
+                    if plant_proto then
+                        local ok, spec = pcall(function() return plant_proto.autoplace_specification end)
+                        if ok and spec and spec.tile_restriction then
+                            restrictions = spec.tile_restriction
+                        else
+                            local ok2, ap = pcall(function() return plant_proto.autoplace end)
+                            if ok2 and ap and ap.tile_restriction then
+                                restrictions = ap.tile_restriction
+                            end
+                        end
+                        local ok3, tbr = pcall(function() return plant_proto.tile_buildability_rules end)
+                        if ok3 and tbr then tile_buildability_rules = tbr end
+                    end
+                    info[seed_name] = {
+                        tile_restriction = restrictions,
+                        tile_buildability_rules = tile_buildability_rules,
+                        plant_proto = plant_proto
+                    }
                 end
-                local ok3, tbr = pcall(function() return plant_proto.tile_buildability_rules end)
-                if ok3 and tbr then tile_buildability_rules = tbr end
             end
-            info[seed_name] = {
-                tile_restriction = restrictions,
-                tile_buildability_rules = tile_buildability_rules,
-                plant_proto = plant_proto
-            }
         end
     end
     
@@ -340,7 +350,10 @@ script.on_init(function()
     write_file_log("=== on_init() CALLED ===", "Initializing fresh storage")
     -- Initialize storage with metatable per Factorio data lifecycle
     storage.agricultural_roboports = setmetatable({}, roboport_modes_mt)
-    storage.virtual_seed_info = Build_virtual_seed_info()
+    -- Build virtual_seed_info using the latest logic
+    if Build_virtual_seed_info then
+        storage.virtual_seed_info = Build_virtual_seed_info()
+    end
     -- Initialize TDM storage to safe defaults
     storage._tdm = { version = 0, snapshot_version = 0, keys = {}, next_index = 1, registered_interval = nil }
     -- Ensure quality plants storage exists for new games
@@ -367,11 +380,19 @@ script.on_load(function()
     -- TDM storage already exists from save, don't modify it (on_load must not write to storage)
     TDM_PERIOD, TDM_TICK_INTERVAL = read_tdm_settings()
     register_tdm_handler(TDM_TICK_INTERVAL)
-    -- Do NOT modify storage.virtual_seed_info or storage._tdm here; on_load must not mutate storage
-    -- Schedule recreation of quality sprites on the next tick (don't mutate storage during on_load)
+    
+    -- Schedule recreation of quality sprites and virtual_seed_info rebuild on the next tick
+    -- Always rebuild virtual_seed_info to pick up any prototype changes since the save was created
     script.on_event(defines.events.on_tick, function(event)
         -- Unregister this one-shot handler immediately
         script.on_event(defines.events.on_tick, nil)
+        
+        -- Always rebuild virtual_seed_info on load (deferred from on_load to avoid mutating storage during on_load)
+        if Build_virtual_seed_info then
+            write_file_log("=== on_load deferred rebuild: Rebuilding virtual_seed_info ===")
+            storage.virtual_seed_info = Build_virtual_seed_info()
+            write_file_log("=== virtual_seed_info rebuilt with", table_size(storage.virtual_seed_info or {}), "entries ===")
+        end
         
         -- Skip quality sprite recreation if disabled
         if not is_quality_enabled() then return end
@@ -637,12 +658,20 @@ local function on_robot_built_virtual_seed(event)
     if entity.name:match("^virtual%-.+%-seed$") then
         local surface = entity.surface
         local position = entity.position
-        local seed_name = entity.name:match("^virtual%-(.+%-seed)$")
+        
+        -- Get the actual seed item name from the virtual entity's prototype
+        local virtual_proto = prototypes.entity[entity.name]
+        local seed_name = nil
+        
+        if virtual_proto and virtual_proto.items_to_place_this and #virtual_proto.items_to_place_this > 0 then
+            seed_name = virtual_proto.items_to_place_this[1].name
+        end
         
         -- Debug: Log all event properties
         if write_file_log then
             write_file_log("[ROBOT DEBUG] Event properties:")
             write_file_log("  entity.name:", entity.name)
+            write_file_log("  extracted seed_name:", seed_name or "nil")
             write_file_log("  entity.quality:", entity.quality and entity.quality.name or "nil")
             write_file_log("  event.item:", event.item and (event.item.name or "has item object") or "nil")
             if event.item then
@@ -660,6 +689,13 @@ local function on_robot_built_virtual_seed(event)
         local plant_result = nil
         if seed_name and prototypes.item[seed_name] then
             plant_result = prototypes.item[seed_name].place_result or prototypes.item[seed_name].plant_result
+            if write_file_log then
+                write_file_log("[ROBOT DEBUG] Found seed item:", seed_name, "plant_result:", plant_result and (type(plant_result) == "table" or type(plant_result) == "userdata") and plant_result.name or plant_result or "nil")
+            end
+        else
+            if write_file_log then
+                write_file_log("[ROBOT DEBUG] Seed item not found:", seed_name or "nil")
+            end
         end
         local plant_result_name = plant_result
         if (type(plant_result) == "table" or type(plant_result) == "userdata") and plant_result.name then
@@ -1158,41 +1194,13 @@ script.on_event(defines.events.on_tower_mined_plant, function(event)
 end)
 
 script.on_configuration_changed(function()
-    if not storage.virtual_seed_info then
-        if Build_virtual_seed_info then
-            storage.virtual_seed_info = Build_virtual_seed_info()
-        else
-            -- fallback: inline build logic
-            local info = {}
-            for seed_name, seed_item in pairs(prototypes.item) do
-                if seed_name:match("%-seed$") then
-                    local plant_result = seed_item.place_result or seed_item.plant_result
-                    local plant_name = (type(plant_result) == "table" or type(plant_result) == "userdata") and plant_result.name or plant_result
-                    local plant_proto = plant_name and prototypes.entity[plant_name]
-                    local restrictions = nil
-                    local tile_buildability_rules = nil
-                    if plant_proto then
-                        local ok, spec = pcall(function() return plant_proto.autoplace_specification end)
-                        if ok and spec and spec.tile_restriction then
-                            restrictions = spec.tile_restriction
-                        else
-                            local ok2, ap = pcall(function() return plant_proto.autoplace end)
-                            if ok2 and ap and ap.tile_restriction then
-                                restrictions = ap.tile_restriction
-                            end
-                        end
-                        local ok3, tbr = pcall(function() return plant_proto.tile_buildability_rules end)
-                        if ok3 and tbr then tile_buildability_rules = tbr end
-                    end
-                    info[seed_name] = {
-                        tile_restriction = restrictions,
-                        tile_buildability_rules = tile_buildability_rules,
-                        plant_proto = plant_proto
-                    }
-                end
-            end
-            storage.virtual_seed_info = info
-        end
+    -- Always rebuild virtual_seed_info on configuration change to pick up new seeds or mod changes
+    write_file_log("=== on_configuration_changed() CALLED ===", "Rebuilding virtual_seed_info")
+    if Build_virtual_seed_info then
+        storage.virtual_seed_info = Build_virtual_seed_info()
+        write_file_log("=== on_configuration_changed() COMPLETE ===", "virtual_seed_info rebuilt")
+    else
+        write_file_log("[ERROR] Build_virtual_seed_info function not available")
     end
 end)
 

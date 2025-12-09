@@ -155,16 +155,53 @@ script.on_event(defines.events.on_gui_opened, function(event)
         -- Prepare for deferred elem_value setting
         _G._agroport_deferred_elem = _G._agroport_deferred_elem or {}
         _G._agroport_deferred_elem[player.index] = {}
-        -- Build a list of all item names ending with '-seed'
+        -- Build a list of all seed items by checking which items can place virtual-*-seed entities
         local prototypes = rawget(_G, 'prototypes')
         local seed_names = {}
-        if prototypes and prototypes.item then
-            for name, proto in pairs(prototypes.item) do
-                if type(name) == "string" and name:match("%-seed$") then
-                    table.insert(seed_names, name)
+        
+        write_file_log("[UI] Scanning for seeds by checking virtual seed entities...")
+        
+        -- Find all virtual-*-seed entities and determine which items can place them
+        if prototypes and prototypes.entity then
+            for entity_name, entity_proto in pairs(prototypes.entity) do
+                -- Check if this is a virtual seed entity (starts with "virtual-" and has "seed" in name)
+                if type(entity_name) == "string" and entity_name:match("^virtual%-.*%-seed$") then
+                    -- Get items_to_place_this to find which item can place this entity
+                    local items_to_place = entity_proto.items_to_place_this
+                    if items_to_place and #items_to_place > 0 then
+                        for _, item_to_place in ipairs(items_to_place) do
+                            local item_name = item_to_place.name
+                            -- Verify the item exists and has plant_result
+                            if prototypes.item and prototypes.item[item_name] then
+                                local item_proto = prototypes.item[item_name]
+                                if item_proto.plant_result then
+                                    -- Avoid duplicates
+                                    local already_added = false
+                                    for _, existing in ipairs(seed_names) do
+                                        if existing == item_name then
+                                            already_added = true
+                                            break
+                                        end
+                                    end
+                                    if not already_added then
+                                        table.insert(seed_names, item_name)
+                                        write_file_log("[UI] Found seed from virtual entity ", entity_name, ": ", item_name)
+                                    end
+                                end
+                            end
+                        end
+                    end
                 end
             end
         end
+        
+        write_file_log("[UI] Total seeds added to filter: ", #seed_names)
+        
+        -- Blacklist mode uses simple item selector (no quality), whitelist uses item-with-quality
+        local quality_enabled = is_quality_enabled()
+        local is_blacklist_mode = settings.filter_invert == true
+        local use_quality_selector = quality_enabled and not is_blacklist_mode
+        
         for i = 1, 5 do
             local filter_entry = filters[i] -- Now a table: {name="...", quality="..."}
             local item_name = nil
@@ -179,12 +216,12 @@ script.on_event(defines.events.on_gui_opened, function(event)
                 quality_name = filter_entry.quality or "normal"
             end
             
-            -- Use simple item selector if quality disabled, item-with-quality if enabled
-            local quality_enabled = is_quality_enabled()
+            -- Blacklist mode: always use simple item selector (no quality)
+            -- Whitelist mode: use item-with-quality if quality enabled
             local filter_btn = filter_table.add{
                 type = "choose-elem-button",
                 name = "agricultural_roboport_filter_" .. tostring(unit_key) .. "_" .. tostring(i),
-                elem_type = quality_enabled and "item-with-quality" or "item",
+                elem_type = use_quality_selector and "item-with-quality" or "item",
                 elem_filters = {
                     {filter = "name", name = seed_names}
                 },
@@ -195,10 +232,10 @@ script.on_event(defines.events.on_gui_opened, function(event)
             -- Defer setting elem_value to next tick for proper initialization
             if item_name and prototypes and prototypes.item and prototypes.item[item_name] then
                 local elem_value
-                if quality_enabled then
+                if use_quality_selector then
                     elem_value = {name = item_name, quality = quality_name or "normal"}
                 else
-                    elem_value = item_name -- Simple string for item-only mode
+                    elem_value = item_name -- Simple string for item-only mode (blacklist or quality disabled)
                 end
                 table.insert(_G._agroport_deferred_elem[player.index], {button=filter_btn, value=elem_value})
             end
@@ -274,6 +311,38 @@ script.on_event(defines.events.on_gui_switch_state_changed, function(event)
             local settings = storage.agricultural_roboports[unit_key]
             local invert = (element.switch_state == "right")
             settings.filter_invert = invert
+            
+            -- When switching to blacklist mode, strip quality from all filters (keep only item names)
+            if invert then
+                local filters = settings.filters or {}
+                for i = 1, #filters do
+                    if type(filters[i]) == "table" and filters[i].name then
+                        filters[i] = {name = filters[i].name, quality = "normal"}
+                    end
+                end
+                settings.filters = filters
+            end
+            
+            -- Rebuild the filter UI to switch between item and item-with-quality selectors
+            local player = game.get_player(event.player_index)
+            if player and player.gui.relative.agricultural_roboport_mode then
+                -- Find and rebuild filter table
+                local frame = player.gui.relative.agricultural_roboport_mode
+                local filter_flow = frame["agricultural_roboport_filter_flow_" .. tostring(unit_key)]
+                if filter_flow then
+                    local filter_outer = filter_flow["agricultural_roboport_filter_outer_flow_" .. tostring(unit_key)]
+                    if filter_outer then
+                        local filter_controls = filter_outer["agricultural_roboport_filter_controls_row_" .. tostring(unit_key)]
+                        if filter_controls then
+                            local filter_table = filter_controls["agricultural_roboport_filter_table_" .. tostring(unit_key)]
+                            if filter_table then
+                                -- Rebuild filter buttons with new elem_type
+                                rebuild_filter_table(player, unit_key, filter_table, settings)
+                            end
+                        end
+                    end
+                end
+            end
         end
     end
 end)
@@ -351,12 +420,13 @@ script.on_event(defines.events.on_gui_elem_changed, function(event)
             if type(filters) ~= "table" then filters = {} end
             
             local quality_enabled = is_quality_enabled()
+            local is_blacklist_mode = settings.filter_invert == true
             
             -- Update or create filter entry
             if element.elem_value then
                 local item_name, quality_name
                 
-                if quality_enabled and type(element.elem_value) == "table" then
+                if type(element.elem_value) == "table" then
                     -- Item-with-quality mode - elem_value is {name="item-name", quality="quality-name"}
                     item_name = element.elem_value.name
                     quality_name = element.elem_value.quality or "normal"
@@ -366,16 +436,32 @@ script.on_event(defines.events.on_gui_elem_changed, function(event)
                     quality_name = "normal"
                 end
                 
-                -- Check if this exact item+quality combination already exists in OTHER slots
+                -- For blacklist mode, check item name only (ignore quality)
+                -- For whitelist mode, check exact item+quality combination
                 local is_duplicate = false
-                for i = 1, 5 do
-                    if i ~= idx and filters[i] then
-                        local other_entry = filters[i]
-                        local other_name = type(other_entry) == "table" and other_entry.name or other_entry
-                        local other_quality = type(other_entry) == "table" and (other_entry.quality or "normal") or "normal"
-                        if other_name == item_name and other_quality == quality_name then
-                            is_duplicate = true
-                            break
+                if is_blacklist_mode then
+                    -- Blacklist: check if item name already exists (quality doesn't matter)
+                    for i = 1, 5 do
+                        if i ~= idx and filters[i] then
+                            local other_entry = filters[i]
+                            local other_name = type(other_entry) == "table" and other_entry.name or other_entry
+                            if other_name == item_name then
+                                is_duplicate = true
+                                break
+                            end
+                        end
+                    end
+                else
+                    -- Whitelist: check exact item+quality combination
+                    for i = 1, 5 do
+                        if i ~= idx and filters[i] then
+                            local other_entry = filters[i]
+                            local other_name = type(other_entry) == "table" and other_entry.name or other_entry
+                            local other_quality = type(other_entry) == "table" and (other_entry.quality or "normal") or "normal"
+                            if other_name == item_name and other_quality == quality_name then
+                                is_duplicate = true
+                                break
+                            end
                         end
                     end
                 end
@@ -385,10 +471,13 @@ script.on_event(defines.events.on_gui_elem_changed, function(event)
                     element.elem_value = nil
                     filters[idx] = nil
                 else
-                    if quality_enabled then
+                    -- Blacklist mode: always store with normal quality (quality is ignored)
+                    -- Whitelist mode: store with actual quality
+                    if is_blacklist_mode then
+                        filters[idx] = {name = item_name, quality = "normal"}
+                    elseif quality_enabled then
                         filters[idx] = {name = item_name, quality = quality_name}
                     else
-                        -- Store as table even in non-quality mode for consistency
                         filters[idx] = {name = item_name, quality = "normal"}
                     end
                 end
@@ -438,6 +527,98 @@ script.on_event(defines.events.on_tick, function(event)
     end
 end)
 
+-- Helper: rebuild filter table when switching between whitelist/blacklist modes
+function rebuild_filter_table(player, unit_key, old_filter_table, settings)
+    local parent = old_filter_table.parent
+    local filters = settings.filters or {}
+    
+    -- Build seed names list
+    local prototypes = rawget(_G, 'prototypes')
+    local seed_names = {}
+    if prototypes and prototypes.entity then
+        for entity_name, entity_proto in pairs(prototypes.entity) do
+            if type(entity_name) == "string" and entity_name:match("^virtual%-.*%-seed$") then
+                local items_to_place = entity_proto.items_to_place_this
+                if items_to_place and #items_to_place > 0 then
+                    for _, item_to_place in ipairs(items_to_place) do
+                        local item_name = item_to_place.name
+                        if prototypes.item and prototypes.item[item_name] and prototypes.item[item_name].plant_result then
+                            local already_added = false
+                            for _, existing in ipairs(seed_names) do
+                                if existing == item_name then
+                                    already_added = true
+                                    break
+                                end
+                            end
+                            if not already_added then
+                                table.insert(seed_names, item_name)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Destroy old table
+    old_filter_table.destroy()
+    
+    -- Create new table with appropriate elem_type
+    local quality_enabled = is_quality_enabled()
+    local is_blacklist_mode = settings.filter_invert == true
+    local use_quality_selector = quality_enabled and not is_blacklist_mode
+    
+    local filter_table = parent.add{
+        type = "table",
+        name = "agricultural_roboport_filter_table_" .. tostring(unit_key),
+        column_count = 5,
+        style = "filter_slot_table"
+    }
+    
+    -- Prepare deferred elem setting
+    _G._agroport_deferred_elem = _G._agroport_deferred_elem or {}
+    _G._agroport_deferred_elem[player.index] = _G._agroport_deferred_elem[player.index] or {}
+    
+    for i = 1, 5 do
+        local filter_entry = filters[i]
+        local item_name = nil
+        local quality_name = nil
+        
+        if type(filter_entry) == "string" then
+            item_name = filter_entry
+            quality_name = "normal"
+        elseif type(filter_entry) == "table" then
+            item_name = filter_entry.name
+            quality_name = filter_entry.quality or "normal"
+        end
+        
+        local filter_btn = filter_table.add{
+            type = "choose-elem-button",
+            name = "agricultural_roboport_filter_" .. tostring(unit_key) .. "_" .. tostring(i),
+            elem_type = use_quality_selector and "item-with-quality" or "item",
+            elem_filters = {
+                {filter = "name", name = seed_names}
+            },
+            enabled = settings.use_filter or false,
+            style = "slot_button"
+        }
+        
+        if item_name and prototypes and prototypes.item and prototypes.item[item_name] then
+            local elem_value
+            if use_quality_selector then
+                elem_value = {name = item_name, quality = quality_name or "normal"}
+            else
+                -- For item-only selector (blacklist mode), use simple string
+                elem_value = item_name
+            end
+            table.insert(_G._agroport_deferred_elem[player.index], {button=filter_btn, value=elem_value})
+        end
+    end
+    
+    -- Update button states
+    update_filter_buttons_and_compress_filters(unit_key, filter_table, settings.use_filter or false, filters)
+end
+
 -- Helper: update filter buttons and compress filters with quality support
 function update_filter_buttons_and_compress_filters(unit_key, filter_table, use_filter_enabled, filters)
     -- Compress filters array to the start (remove nil gaps)
@@ -459,14 +640,18 @@ function update_filter_buttons_and_compress_filters(unit_key, filter_table, use_
         if filter_btn and filter_btn.valid then
             local filter_entry = compressed_filters[i]
             
+            -- Determine if this button uses quality selector based on its elem_type
+            local uses_quality_selector = (filter_btn.elem_type == "item-with-quality")
+            
             -- Set button value
             if filter_entry and type(filter_entry) == "table" and filter_entry.name then
-                if quality_enabled then
+                if uses_quality_selector then
                     filter_btn.elem_value = {
                         name = filter_entry.name,
                         quality = filter_entry.quality or "normal"
                     }
                 else
+                    -- Simple item selector - use string only
                     filter_btn.elem_value = filter_entry.name
                 end
             else

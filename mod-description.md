@@ -13,6 +13,8 @@ Key features
 - Virtual-seed system: plants are placed as ghosts and built by robots.
 - **Quality support**: Plants retain quality from seeds and display quality badges. Toggle quality tracking with startup setting.
 - **Quality mutations**: Configurable chance for harvested plants to upgrade or downgrade quality tiers.
+- **Mod compatibility**: Supports custom agricultural items from other mods (e.g., boompuff-spore from Boompuff Agriculture).
+- **Smart filtering**: Whitelist mode supports per-quality filtering; blacklist mode blocks all qualities of an item.
 - Time-Division Multiplexing (TDM) scheduler: spreads work across ticks to avoid spikes.
 - Per-roboport precomputed grids for harvesting to minimize search costs.
 - Runtime settings to tune performance vs responsiveness.
@@ -30,7 +32,8 @@ How it works (player summary)
 Settings (what to tweak)
 ------------------------
 **Startup Settings:**
-- Enable quality plants — Toggle quality tracking and display (requires game restart).
+- **Enable quality plants** — Toggle quality tracking and display (requires game restart).
+- **Additional seeds** — Comma-separated list of custom seed items that don't follow the standard "-seed" naming convention. Used for mod compatibility with items like "boompuff-spore". Example: `boompuff-spore, alien-seed` (requires game restart).
 
 **Runtime Settings:**
 - Max seeds per tick — how many seed placements are attempted per tick (lower reduces CPU).
@@ -52,12 +55,17 @@ Performance notes & tuning
 Tips
 ----
 - Use filters to avoid planting undesired species and to limit the work set.
+- **Whitelist filtering**: Select specific items with specific qualities to plant only those combinations.
+- **Blacklist filtering**: Block entire item types regardless of quality (e.g., blacklist "tree-seed" blocks all qualities).
 - If you change settings, the scheduler re-registers itself to the new interval automatically.
 - **Quality farming**: Enable quality support to track seed quality through the growth cycle and configure mutation rates for breeding higher-tier plants.
 - Adjust quality improvement chance to control upgrade vs downgrade probability during mutations.
+- **Mod compatibility**: Add non-standard seed items (like "boompuff-spore") to the "Additional seeds" startup setting for automatic support.
 
 Compatibility & translations
 ----------------------------
 - Built for Factorio 2.0+.
 - Requires Space Age and Quality DLCs.
+- **Compatible with mods** that add agricultural items (automatically detects items with plant_result).
+- **Examples**: Boompuff Agriculture, Space Exploration agricultural systems, and any mod adding plantable items.
 - Full locale support included (English, German, Spanish, French, Russian, Chinese, Japanese).

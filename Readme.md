@@ -2,6 +2,27 @@
 
 For a complete feature overview and newcomer guide, see [mod-description.md](mod-description.md).
 
+## Mod Compatibility
+
+This mod is designed to work with any mod that adds agricultural items. It automatically detects and supports:
+
+- **Standard seeds** (items ending in "-seed" with `plant_result`)
+- **Custom agricultural items** (any item with `plant_result`, like "boompuff-spore" from Boompuff Agriculture)
+- **Items in any category** (item, capsule, ammo, tool)
+
+For non-standard seed items that don't follow the "-seed" naming convention, add them to the startup setting:
+
+**Settings → Startup → Agricultural Roboport → Additional Seeds**
+
+Example: `boompuff-spore, alien-seed, custom-plant-item`
+
+The mod will:
+- Automatically create virtual ghost entities for these items
+- Include them in filter dropdowns
+- Support quality tracking (if enabled)
+- Apply tile restrictions and buildability rules
+- Handle both whitelist and blacklist filtering
+
 ## Feature & Progress Checklist
 
 - [x] Implemented ghost-able plants by creating virtual entities, generated automatically
@@ -29,6 +50,8 @@ For a complete feature overview and newcomer guide, see [mod-description.md](mod
 - [x] Dynamic UI adaptation based on quality setting (item vs item-with-quality selectors)
 - [x] Quality badge rendering with alt-mode integration
 - [x] Fix manual planting quality preservation
+- [x] Add support for custom seed items from other mods (non-standard naming)
+- [x] Implement blacklist filtering at item level (quality-agnostic)
 - [ ] Invite community contributions for additional languages
 
 ---
@@ -42,6 +65,7 @@ Below are the main settings exposed by the mod and their intended effect on game
 ### Startup Settings
 
 - `agricultural-roboport-enable-quality`: Toggle quality tracking and display for plants. When enabled, plants retain quality from seeds and can mutate during harvest. When disabled, all quality logic is bypassed. **Requires game restart.**
+- `agricultural-roboport-additional-seeds`: Comma-separated list of custom seed items that don't follow the standard "-seed" naming convention. Used for mod compatibility with items like "boompuff-spore". The mod will create virtual seed entities for these items. **Requires game restart.** Example: `boompuff-spore, alien-seed`
 
 ### Runtime Settings
 
