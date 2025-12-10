@@ -7,14 +7,6 @@ data:extend({
     order = "a-0"
   },
   {
-    type = "string-setting",
-    name = "agricultural-roboport-additional-seeds",
-    setting_type = "startup",
-    default_value = "boompuff-spore",
-    allow_blank = true,
-    order = "a-1"
-  },
-  {
     type = "int-setting",
     name = "agricultural-roboport-max-seeds-per-tick",
     setting_type = "runtime-global",

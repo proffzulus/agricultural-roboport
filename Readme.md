@@ -4,24 +4,28 @@ For a complete feature overview and newcomer guide, see [mod-description.md](mod
 
 ## Mod Compatibility
 
-This mod is designed to work with any mod that adds agricultural items. It automatically detects and supports:
+This mod **automatically detects and supports all agricultural items** from any mod - no configuration needed!
 
-- **Standard seeds** (items ending in "-seed" with `plant_result`)
-- **Custom agricultural items** (any item with `plant_result`, like "boompuff-spore" from Boompuff Agriculture)
-- **Items in any category** (item, capsule, ammo, tool)
+The mod scans all game prototypes and creates virtual seed entities for any item with a `plant_result` property, regardless of:
+- **Item naming** (works with "tree-seed", "boompuff-spore", "alien-plant", etc.)
+- **Item category** (item, capsule, ammo, tool, or any custom category)
+- **Mod origin** (base game, DLC, or any third-party mod)
 
-For non-standard seed items that don't follow the "-seed" naming convention, add them to the startup setting:
+### Supported Mods (Partial List)
+- ✅ **Base game** - all vanilla seeds
+- ✅ **Space Age DLC** - all planet-specific agriculture
+- ✅ **Boompuff Agriculture** - boompuff-spore and variants
+- ✅ **Any mod with plantable items** - automatic detection
 
-**Settings → Startup → Agricultural Roboport → Additional Seeds**
+### How It Works
+1. At game startup, the mod scans every prototype category
+2. Any item with `plant_result` is recognized as a seed
+3. Virtual ghost entities are created automatically
+4. Seeds appear in filter dropdowns
+5. Quality tracking works (if enabled)
+6. Tile restrictions and buildability rules apply
 
-Example: `boompuff-spore, alien-seed, custom-plant-item`
-
-The mod will:
-- Automatically create virtual ghost entities for these items
-- Include them in filter dropdowns
-- Support quality tracking (if enabled)
-- Apply tile restrictions and buildability rules
-- Handle both whitelist and blacklist filtering
+**No settings. No configuration. It just works.**
 
 ## Feature & Progress Checklist
 
@@ -65,7 +69,6 @@ Below are the main settings exposed by the mod and their intended effect on game
 ### Startup Settings
 
 - `agricultural-roboport-enable-quality`: Toggle quality tracking and display for plants. When enabled, plants retain quality from seeds and can mutate during harvest. When disabled, all quality logic is bypassed. **Requires game restart.**
-- `agricultural-roboport-additional-seeds`: Comma-separated list of custom seed items that don't follow the standard "-seed" naming convention. Used for mod compatibility with items like "boompuff-spore". The mod will create virtual seed entities for these items. **Requires game restart.** Example: `boompuff-spore, alien-seed`
 
 ### Runtime Settings
 

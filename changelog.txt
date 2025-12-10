@@ -1,8 +1,20 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.2.1
+Date: 2025-12-10
+  Changes:
+    - Automatic detection of ALL seed items - no configuration needed
+    - Removed 'agricultural-roboport-additional-seeds' startup setting (no longer necessary)
+    - Prototype scanning now checks every data.raw category for items with plant_result
+    - Supports any modded agricultural item regardless of naming convention or item category
+  Info:
+    - No user action required - mod automatically detects all seeds
+    - Existing saves will work seamlessly (virtual seed info rebuilds automatically)
+    - Better mod compatibility - works with any mod adding plantable items
+---------------------------------------------------------------------------------------------------
 Version: 1.2.0
 Date: 2025-12-09
   Major Features:
-    - Added support for non-standard seed items from other mods (e.g., boompuff-spore from Space Exploration)
+    - Added support for non-standard seed items from other mods (e.g., boompuff-spore from Boompuff Agriculture)
     - Added startup setting 'agricultural-roboport-additional-seeds' to specify custom seed items by name
     - Virtual seed entities now created for items with plant_result in multiple categories (item, capsule, ammo, tool)
     - Custom seeds automatically appear in filter dropdowns and work with all roboport features
