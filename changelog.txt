@@ -1,4 +1,17 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.2.2
+Date: 2025-12-15
+  Major Features:
+    - Added startup setting 'Seed in dense grid' for planting seeds on every tile instead of every 3rd tile
+    - Dense mode enables much tighter plant packing for higher crop density
+    - Added 'agro-seed-info' console command to inspect plant properties (collision boxes, tile requirements, etc.)
+  Changes:
+    - Dense mode requires game restart to take effect (startup setting)
+    - Performance impact: Dense seeding increases collision checks - use whitelist filters to limit load
+  Info:
+    - Dense mode recommended only with whitelist filters to control which plants are seeded
+    - See mod description for performance tuning guidance
+---------------------------------------------------------------------------------------------------
 Version: 1.2.1
 Date: 2025-12-10
   Changes:

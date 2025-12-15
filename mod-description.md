@@ -33,6 +33,7 @@ Settings (what to tweak)
 ------------------------
 **Startup Settings:**
 - **Enable quality plants** — Toggle quality tracking and display (requires game restart).
+- **Seed in dense grid** — Attempts to plant on every tile instead of every 3rd tile. Enables much tighter plant packing but **will significantly impact performance**. Use whitelist filters to limit which plants are seeded. Requires game restart.
 
 **Runtime Settings:**
 - Max seeds per tick — how many seed placements are attempted per tick (lower reduces CPU).
@@ -48,6 +49,7 @@ Settings (what to tweak)
 Performance notes & tuning
 --------------------------
 - The mod is optimized for scale: it precomputes grids on placement and uses filtered small-area searches during operation to minimize returned-entity counts.
+- **Dense seeding mode warning**: Seeding on every tile (instead of every 3rd) dramatically increases the number of collision checks and ghost placements per area. This **will impact game performance**, especially with many roboports or large seeding areas. **Strongly recommended**: Use whitelist filters to limit seeding to only essential plant types when using dense mode.
 - If you see slowdowns on very large maps, reduce "harvest checks per call" and "max seeds per tick" to trade coverage speed for lower CPU.
 - The TDM tick interval can be decreased for more frequent small batches or increased to reduce wake frequency.
 

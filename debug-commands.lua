@@ -151,3 +151,239 @@ commands.add_command("agro-rebuild-seed-info", "Rebuild virtual_seed_info storag
         player.print("[color=red]Build_virtual_seed_info function not found![/color]")
     end
 end)
+
+commands.add_command("agro-seed-info", "Show detailed plant info for the seed item in hand", function(event)
+    local player = game.get_player(event.player_index)
+    if not player then return end
+    
+    local cursor_stack = player.cursor_stack
+    if not cursor_stack or not cursor_stack.valid_for_read then
+        player.print("[color=yellow]No item in hand! Hold a seed item and run this command.[/color]")
+        return
+    end
+    
+    local seed_item = cursor_stack.name
+    local seed_proto = prototypes.item[seed_item]
+    
+    if not seed_proto or not seed_proto.plant_result then
+        player.print("[color=yellow]Item '" .. seed_item .. "' is not a seed (no plant_result)![/color]")
+        return
+    end
+    
+    -- Get plant prototype
+    local plant_ref = seed_proto.plant_result
+    local plant_name = type(plant_ref) == "string" and plant_ref or (plant_ref.name or "unknown")
+    local plant_proto = prototypes.entity[plant_name]
+    
+    if not plant_proto then
+        player.print("[color=red]Plant entity '" .. tostring(plant_name) .. "' not found![/color]")
+        return
+    end
+    
+    -- Output to screen
+    player.print("=== SEED INFO: " .. seed_item .. " ===")
+    player.print("Plant: " .. plant_name)
+    player.print("")
+    
+    -- Collision boxes
+    player.print("=== Collision Info ===")
+    local ok_cb, cb = pcall(function() return plant_proto.collision_box end)
+    if ok_cb and cb then
+        if type(cb) == "table" and cb[1] and cb[2] and type(cb[1]) == "table" and type(cb[2]) == "table" then
+            player.print(string.format("  collision_box: {{%.2f, %.2f}, {%.2f, %.2f}}", 
+                cb[1][1] or 0, cb[1][2] or 0, cb[2][1] or 0, cb[2][2] or 0))
+            local width = (cb[2][1] or 0) - (cb[1][1] or 0)
+            local height = (cb[2][2] or 0) - (cb[1][2] or 0)
+            player.print(string.format("  size: %.2f x %.2f tiles", width, height))
+        else
+            player.print("  collision_box: " .. serpent.line(cb))
+        end
+    else
+        player.print("  collision_box: [color=yellow]nil[/color]")
+    end
+    
+    local ok_sb, sb = pcall(function() return plant_proto.selection_box end)
+    if ok_sb and sb then
+        if type(sb) == "table" and sb[1] and sb[2] and type(sb[1]) == "table" and type(sb[2]) == "table" then
+            player.print(string.format("  selection_box: {{%.2f, %.2f}, {%.2f, %.2f}}", 
+                sb[1][1] or 0, sb[1][2] or 0, sb[2][1] or 0, sb[2][2] or 0))
+        else
+            player.print("  selection_box: " .. serpent.line(sb))
+        end
+    else
+        player.print("  selection_box: [color=yellow]nil[/color]")
+    end
+    
+    local ok_mgb, mgb = pcall(function() return plant_proto.map_generator_bounding_box end)
+    if ok_mgb and mgb then
+        if type(mgb) == "table" and mgb[1] and mgb[2] and type(mgb[1]) == "table" and type(mgb[2]) == "table" then
+            player.print(string.format("  map_generator_bounding_box: {{%.2f, %.2f}, {%.2f, %.2f}}", 
+                mgb[1][1] or 0, mgb[1][2] or 0, mgb[2][1] or 0, mgb[2][2] or 0))
+        else
+            player.print("  map_generator_bounding_box: " .. serpent.line(mgb))
+        end
+    end
+    
+    -- Collision mask
+    player.print("")
+    player.print("=== Collision Mask ===")
+    local ok_cm, cm = pcall(function() return plant_proto.collision_mask end)
+    if ok_cm and cm and cm.layers then
+        local layers = cm.layers
+        local layer_list = {}
+        for layer_name, enabled in pairs(layers) do
+            if enabled then
+                table.insert(layer_list, layer_name)
+            end
+        end
+        if #layer_list > 0 then
+            table.sort(layer_list)
+            player.print("  Layers: " .. table.concat(layer_list, ", "))
+        else
+            player.print("  Layers: [color=yellow]none[/color]")
+        end
+    else
+        player.print("  [color=yellow]No collision mask[/color]")
+    end
+    
+    -- Tile restrictions (autoplace)
+    player.print("")
+    player.print("=== Tile Restrictions ===")
+    local ok_ap, ap = pcall(function() return plant_proto.autoplace end)
+    if ok_ap and ap and ap.tile_restriction then
+        local restrictions = ap.tile_restriction
+        local tile_list = {}
+        for _, tile in pairs(restrictions) do
+            if type(tile) == "table" and tile.first then
+                table.insert(tile_list, tile.first)
+            elseif type(tile) == "string" then
+                table.insert(tile_list, tile)
+            end
+        end
+        if #tile_list > 0 then
+            player.print("  Allowed tiles: " .. table.concat(tile_list, ", "))
+        else
+            player.print("  [color=yellow]Empty tile restriction list[/color]")
+        end
+    else
+        player.print("  [color=green]No tile restrictions (can plant anywhere)[/color]")
+    end
+    
+    -- Tile buildability rules
+    local ok_tbr, tbr = pcall(function() return plant_proto.tile_buildability_rules end)
+    if ok_tbr and tbr then
+        player.print("")
+        player.print("=== Tile Buildability Rules ===")
+        local ok_count, count = pcall(function() return #tbr end)
+        player.print("  Rule count: " .. (ok_count and count or "unknown"))
+        for idx, rule in pairs(tbr) do
+            player.print("  Rule " .. idx .. ":")
+            if rule.required_tiles then
+                if rule.required_tiles.tiles then
+                    local tiles = {}
+                    for _, t in pairs(rule.required_tiles.tiles) do
+                        local tile_name = type(t) == "table" and t.first or t
+                        table.insert(tiles, tile_name)
+                    end
+                    player.print("    required_tiles: " .. table.concat(tiles, ", "))
+                end
+                if rule.required_tiles.layers then
+                    local layers = {}
+                    for layer, enabled in pairs(rule.required_tiles.layers) do
+                        if enabled then table.insert(layers, layer) end
+                    end
+                    if #layers > 0 then
+                        player.print("    required_layers: " .. table.concat(layers, ", "))
+                    end
+                end
+            end
+            if rule.colliding_tiles then
+                if rule.colliding_tiles.tiles then
+                    local tiles = {}
+                    for _, t in pairs(rule.colliding_tiles.tiles) do
+                        local tile_name = type(t) == "table" and t.first or t
+                        table.insert(tiles, tile_name)
+                    end
+                    player.print("    colliding_tiles: " .. table.concat(tiles, ", "))
+                end
+                if rule.colliding_tiles.layers then
+                    local layers = {}
+                    for layer, enabled in pairs(rule.colliding_tiles.layers) do
+                        if enabled then table.insert(layers, layer) end
+                    end
+                    if #layers > 0 then
+                        player.print("    colliding_layers: " .. table.concat(layers, ", "))
+                    end
+                end
+            end
+            if rule.remove_on_collision ~= nil then
+                player.print("    remove_on_collision: " .. tostring(rule.remove_on_collision))
+            end
+        end
+    end
+    
+    -- Surface conditions
+    local ok_sc, sc = pcall(function() return plant_proto.surface_conditions end)
+    if ok_sc and sc then
+        player.print("")
+        player.print("=== Surface Conditions ===")
+        for idx, condition in pairs(sc) do
+            local min_str = condition.min and string.format("%.2f", condition.min) or "unbounded"
+            local max_str = condition.max and string.format("%.2f", condition.max) or "unbounded"
+            player.print(string.format("  %s: [%s, %s]", condition.property, min_str, max_str))
+        end
+    end
+    
+    -- Other relevant properties
+    player.print("")
+    player.print("=== Other Properties ===")
+    local ok_type, ptype = pcall(function() return plant_proto.type end)
+    player.print("  Type: " .. (ok_type and ptype or "unknown"))
+    local ok_gt, growth_ticks = pcall(function() return plant_proto.growth_ticks end)
+    if ok_gt and growth_ticks then
+        player.print("  Growth ticks: " .. growth_ticks)
+    end
+    local ok_flags, flags_data = pcall(function() return plant_proto.flags end)
+    if ok_flags and flags_data then
+        local flags = {}
+        for flag_name, flag_value in pairs(flags_data) do
+            if flag_value then
+                table.insert(flags, flag_name)
+            end
+        end
+        if #flags > 0 then
+            player.print("  Flags: " .. table.concat(flags, ", "))
+        end
+    end
+    
+    -- Output to file log if enabled
+    if write_file_log then
+        write_file_log("=== SEED INFO: " .. seed_item .. " ===")
+        write_file_log("Plant:", plant_name)
+        local ok_cb_log, cb_log = pcall(function() return plant_proto.collision_box end)
+        if ok_cb_log and cb_log then
+            write_file_log("collision_box:", serpent.line(cb_log))
+        end
+        local ok_sb_log, sb_log = pcall(function() return plant_proto.selection_box end)
+        if ok_sb_log and sb_log then
+            write_file_log("selection_box:", serpent.line(sb_log))
+        end
+        local ok_cm_log, cm_log = pcall(function() return plant_proto.collision_mask end)
+        if ok_cm_log and cm_log then
+            write_file_log("collision_mask:", serpent.line(cm_log))
+        end
+        local ok_ap_log, ap_log = pcall(function() return plant_proto.autoplace end)
+        if ok_ap_log and ap_log and ap_log.tile_restriction then
+            write_file_log("tile_restriction:", serpent.line(ap_log.tile_restriction))
+        end
+        local ok_tbr_log, tbr_log = pcall(function() return plant_proto.tile_buildability_rules end)
+        if ok_tbr_log and tbr_log then
+            write_file_log("tile_buildability_rules:", serpent.block(tbr_log))
+        end
+        local ok_sc_log, sc_log = pcall(function() return plant_proto.surface_conditions end)
+        if ok_sc_log and sc_log then
+            write_file_log("surface_conditions:", serpent.block(sc_log))
+        end
+        write_file_log("=== END SEED INFO ===")
+    end
+end)

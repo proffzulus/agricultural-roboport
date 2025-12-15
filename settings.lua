@@ -7,6 +7,13 @@ data:extend({
     order = "a-0"
   },
   {
+    type = "bool-setting",
+    name = "agricultural-roboport-dense-seeding",
+    setting_type = "startup",
+    default_value = false,
+    order = "a-1"
+  },
+  {
     type = "int-setting",
     name = "agricultural-roboport-max-seeds-per-tick",
     setting_type = "runtime-global",

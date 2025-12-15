@@ -16,6 +16,109 @@ end
 
 -- Helper: Logging utility using Factorio's helpers for file logging
 
+-- Helper: Try to place entity at position with small adjustments (wiggle) if exact position fails
+-- Returns: adjusted_position if successful, nil if all attempts fail
+local function try_position_with_wiggle(surface, entity_name, base_pos, force, dense_mode)
+    -- In dense mode, try sub-tile offsets; in sparse mode, only try exact position
+    local offsets = dense_mode and {
+        {0, 0},           -- Exact position first
+        {0.25, 0},        -- Small offsets to find adjacent free spots
+        {-0.25, 0},
+        {0, 0.25},
+        {0, -0.25},
+        {0.25, 0.25},
+        {-0.25, -0.25},
+        {0.25, -0.25},
+        {-0.25, 0.25},
+    } or {{0, 0}}  -- Sparse mode: only try exact position
+    
+    for _, offset in ipairs(offsets) do
+        local test_pos = {x = base_pos.x + offset[1], y = base_pos.y + offset[2]}
+        if surface.can_place_entity{
+            name = entity_name,
+            position = test_pos,
+            force = force
+        } then
+            return test_pos
+        end
+    end
+    
+    return nil  -- All attempts failed
+end
+
+-- Helper: Validate tiles at a specific position for a plant
+-- Returns: allowed (boolean), reason (string or nil)
+local function validate_tiles_at_position(surface, position, seed_name, virtual_seed_info, plant_proto, plant_collision_box, dense_mode)
+    local info = virtual_seed_info[seed_name] or {}
+    local restrictions = info.tile_restriction
+    local tile_buildability_rules = info.tile_buildability_rules
+    
+    -- Build tiles array based on plant collision box
+    local tiles = {}
+    if dense_mode and plant_collision_box and type(plant_collision_box) == "table" and plant_collision_box[1] and plant_collision_box[2] then
+        -- In dense mode, check all tiles covered by the PLANT's collision box
+        local x1 = math.floor(position.x + (plant_collision_box[1][1] or 0))
+        local y1 = math.floor(position.y + (plant_collision_box[1][2] or 0))
+        local x2 = math.ceil(position.x + (plant_collision_box[2][1] or 0))
+        local y2 = math.ceil(position.y + (plant_collision_box[2][2] or 0))
+        
+        for x = x1, x2 do
+            for y = y1, y2 do
+                table.insert(tiles, surface.get_tile(x, y))
+            end
+        end
+    else
+        -- Sparse mode or fallback: check 3x3 area
+        for dx = -1, 1 do
+            for dy = -1, 1 do
+                table.insert(tiles, surface.get_tile(position.x + dx, position.y + dy))
+            end
+        end
+    end
+    
+    -- Normalize tile_restriction to a flat list of tile names
+    local normalized_restrictions = nil
+    if restrictions then
+        normalized_restrictions = {}
+        for _, allowed_tile in pairs(restrictions) do
+            if type(allowed_tile) == "table" and allowed_tile.first then
+                table.insert(normalized_restrictions, allowed_tile.first)
+            elseif type(allowed_tile) == "string" then
+                table.insert(normalized_restrictions, allowed_tile)
+            end
+        end
+    end
+    
+    -- First check tile_restriction (tile names) if present
+    if normalized_restrictions and #normalized_restrictions > 0 then
+        for _, plant_tile in ipairs(tiles) do
+            local tile_ok = false
+            for _, allowed_tile in ipairs(normalized_restrictions) do
+                if plant_tile.name == allowed_tile then
+                    tile_ok = true
+                    break
+                end
+            end
+            if not tile_ok then
+                return false, "tile_restriction_failed"
+            end
+        end
+    end
+    
+    -- ALWAYS check tile_buildability_rules if they exist
+    if tile_buildability_rules then
+        local allowed_tbr, dbg = tile_buildability.evaluate_tile_buildability(surface, position, seed_name, info, plant_proto, plant_collision_box)
+        if write_file_log then
+            write_file_log("seed:tile_check", seed_name, dbg.center_tile or "<nil>", allowed_tbr and "allowed" or "blocked", serpent and serpent.block and serpent.block(dbg) or tostring(dbg))
+        end
+        if not allowed_tbr then
+            return false, "tile_buildability_failed"
+        end
+    end
+    
+    return true, nil
+end
+
 -- implement "seeding" routine:
 -- place entity-ghost with ghost-name "virtual-tree-seed" every 3 tiles within all construction range
 function seed(roboport, seed_logistic_only)
@@ -28,7 +131,10 @@ function seed(roboport, seed_logistic_only)
     local surface = roboport.surface
     local force = roboport.force
     local radius = seed_logistic_only and roboport.logistic_cell.logistic_radius or roboport.logistic_cell.construction_radius
-    local step = 3
+    
+    -- Check if dense seeding mode is enabled (startup setting)
+    local dense_mode = (settings.startup["agricultural-roboport-dense-seeding"] and settings.startup["agricultural-roboport-dense-seeding"].value) or false
+    local step = dense_mode and 1 or 3
 
     -- Per-roboport settings and precomputed candidate positions
     local rsettings = storage.agricultural_roboports[roboport.unit_number] or {}
@@ -40,7 +146,7 @@ function seed(roboport, seed_logistic_only)
 
     -- Recompute precomputed positions when the requested seeding mode (logistic-only vs construction) differs
     local requested_mode = not not seed_logistic_only -- ensure boolean
-    if not rsettings.precomputed.seed_positions or rsettings.precomputed.mode ~= requested_mode then
+    if not rsettings.precomputed.seed_positions or rsettings.precomputed.mode ~= requested_mode or rsettings.precomputed.dense ~= dense_mode then
         local positions = {}
         local radius_for_mode = seed_logistic_only and roboport.logistic_cell.logistic_radius or roboport.logistic_cell.construction_radius
         for x = math.ceil(roboport.position.x - radius_for_mode + 2), math.floor(roboport.position.x + radius_for_mode - 2), step do
@@ -51,6 +157,7 @@ function seed(roboport, seed_logistic_only)
         rsettings.precomputed.seed_positions = positions
         rsettings.precomputed.next_seed_index = 1
         rsettings.precomputed.mode = requested_mode
+        rsettings.precomputed.dense = dense_mode
         storage.agricultural_roboports[roboport.unit_number] = rsettings
     end
 
@@ -114,163 +221,159 @@ function seed(roboport, seed_logistic_only)
     local idx = rsettings.precomputed.next_seed_index or 1
     for i = 1, checks_per_call do
         if placed >= max_seeds then break end
+        
+        -- Wrap index if needed
+        if idx > total_positions then idx = 1 end
+        
         local pos = positions[idx]
         idx = idx + 1
-        if idx > total_positions then idx = 1 end
 
-        -- Check for any real entities (excluding corpses and those marked for deconstruction) or any ghosts in the area
-        local area = {{pos.x - 1.4, pos.y - 1.4}, {pos.x + 1.4, pos.y + 1.4}}
-        local entities = surface.find_entities_filtered{area = area}
-        local obstacle_found = false
-        for _, ent in ipairs(entities) do
-            if ent.type ~= "corpse" then
-                if ent.name == "entity-ghost" then
-                    obstacle_found = true
-                    break
-                elseif not ent.to_be_deconstructed() then
-                    obstacle_found = true
-                    break
+        -- Build candidate seeds list
+        local candidate_seeds = {} -- Format: {{name="seed-name", quality="quality-name"}, ...}
+        if use_filter and not filter_invert then
+            -- Whitelist mode: only include items+qualities from whitelist
+            -- If quality is disabled, force all to "normal"
+            local quality_support_enabled = is_quality_enabled()
+            for item_name, qualities in pairs(whitelist) do
+                if quality_support_enabled then
+                    for quality_name, _ in pairs(qualities) do
+                        table.insert(candidate_seeds, {name = item_name, quality = quality_name})
+                    end
+                else
+                    -- Quality disabled, only use normal quality once per item
+                    table.insert(candidate_seeds, {name = item_name, quality = "normal"})
+                end
+            end
+        else
+            -- No filter OR blacklist mode: include all seeds with all qualities (except blacklisted)
+            local quality_support_enabled = is_quality_enabled()
+            local prototypes_qual = prototypes.quality
+            local has_qualities = false
+            if quality_support_enabled and prototypes_qual then
+                -- Check if there are any qualities by trying to get normal quality
+                has_qualities = prototypes_qual["normal"] ~= nil
+            end
+            
+            for seed_name, seed_item in pairs(prototypes.item) do
+                if seed_name:match("%-seed$") and seed_item.plant_result then
+                    -- Blacklist check: if item is blacklisted, skip ALL qualities
+                    local is_blacklisted = use_filter and filter_invert and blacklist[seed_name]
+                    if not is_blacklisted then
+                        if has_qualities then
+                            -- For each seed, add all available qualities
+                            for quality_name, _ in pairs(prototypes_qual) do
+                                table.insert(candidate_seeds, {name = seed_name, quality = quality_name})
+                            end
+                        else
+                            -- No qualities system OR quality disabled, just use normal quality
+                            table.insert(candidate_seeds, {name = seed_name, quality = "normal"})
+                        end
+                    end
                 end
             end
         end
-        if not obstacle_found then
-            local tiles = {}
-            for dx = -1, 1 do
-                for dy = -1, 1 do
-                    table.insert(tiles, surface.get_tile(pos.x + dx, pos.y + dy))
-                end
-            end
-            local candidate_seeds = {} -- Format: {{name="seed-name", quality="quality-name"}, ...}
-            if use_filter and not filter_invert then
-                -- Whitelist mode: only include items+qualities from whitelist
-                -- If quality is disabled, force all to "normal"
-                local quality_support_enabled = is_quality_enabled()
-                for item_name, qualities in pairs(whitelist) do
-                    if quality_support_enabled then
-                        for quality_name, _ in pairs(qualities) do
-                            table.insert(candidate_seeds, {name = item_name, quality = quality_name})
-                        end
-                    else
-                        -- Quality disabled, only use normal quality once per item
-                        table.insert(candidate_seeds, {name = item_name, quality = "normal"})
+        
+        -- In dense mode, sort seeds by plant size (largest first) for optimal packing
+        if dense_mode and #candidate_seeds > 1 then
+            table.sort(candidate_seeds, function(a, b)
+                -- Get plant prototypes for both seeds
+                local seed_a = prototypes.item[a.name]
+                local seed_b = prototypes.item[b.name]
+                if not seed_a or not seed_b then return false end
+                
+                local plant_a_name = type(seed_a.plant_result) == "string" and seed_a.plant_result or (seed_a.plant_result and seed_a.plant_result.name)
+                local plant_b_name = type(seed_b.plant_result) == "string" and seed_b.plant_result or (seed_b.plant_result and seed_b.plant_result.name)
+                
+                local plant_a = plant_a_name and prototypes.entity[plant_a_name]
+                local plant_b = plant_b_name and prototypes.entity[plant_b_name]
+                
+                if not plant_a or not plant_b then return false end
+                
+                -- Calculate collision box areas
+                local calc_area = function(cbox)
+                    if cbox and type(cbox) == "table" and cbox[1] and cbox[2] then
+                        local width = (cbox[2][1] or 0) - (cbox[1][1] or 0)
+                        local height = (cbox[2][2] or 0) - (cbox[1][2] or 0)
+                        return width * height
                     end
+                    return 0
                 end
+                
+                local area_a = calc_area(plant_a.collision_box)
+                local area_b = calc_area(plant_b.collision_box)
+                
+                -- Sort descending (largest first)
+                return area_a > area_b
+            end)
+        end
+        
+        for _, seed_entry in ipairs(candidate_seeds) do
+            local seed_name = seed_entry.name
+            local quality_name = seed_entry.quality or "normal"
+            local seed_item = prototypes.item[seed_name]
+            local plant_ref = seed_item and seed_item.plant_result
+            if not check_surface_conditions(plant_ref, surface) then goto continue end
+            
+            -- Determine virtual seed name: standard seeds keep their name, non-standard get "-seed" appended
+            local virtual_seed_name
+            if seed_name:match("%-seed$") then
+                virtual_seed_name = "virtual-" .. seed_name
             else
-                -- No filter OR blacklist mode: include all seeds with all qualities (except blacklisted)
-                local quality_support_enabled = is_quality_enabled()
-                local prototypes_qual = prototypes.quality
-                local has_qualities = false
-                if quality_support_enabled and prototypes_qual then
-                    -- Check if there are any qualities by trying to get normal quality
-                    has_qualities = prototypes_qual["normal"] ~= nil
-                end
-                
-                for seed_name, seed_item in pairs(prototypes.item) do
-                    if seed_name:match("%-seed$") and seed_item.plant_result then
-                        -- Blacklist check: if item is blacklisted, skip ALL qualities
-                        local is_blacklisted = use_filter and filter_invert and blacklist[seed_name]
-                        if not is_blacklisted then
-                            if has_qualities then
-                                -- For each seed, add all available qualities
-                                for quality_name, _ in pairs(prototypes_qual) do
-                                    table.insert(candidate_seeds, {name = seed_name, quality = quality_name})
-                                end
-                            else
-                                -- No qualities system OR quality disabled, just use normal quality
-                                table.insert(candidate_seeds, {name = seed_name, quality = "normal"})
-                            end
-                        end
-                    end
-                end
+                virtual_seed_name = "virtual-" .. seed_name .. "-seed"
             end
-			
-            for _, seed_entry in ipairs(candidate_seeds) do
-                local seed_name = seed_entry.name
-                local quality_name = seed_entry.quality or "normal"
-                local seed_item = prototypes.item[seed_name]
-                local plant_ref = seed_item and seed_item.plant_result
-                if not check_surface_conditions(plant_ref, surface) then goto continue end
+            
+            if plant_ref and prototypes.entity[virtual_seed_name] then
+                -- Get virtual seed prototype to determine obstacle detection area
+                local virtual_seed_proto = prototypes.entity[virtual_seed_name]
+                local virtual_collision_box = virtual_seed_proto and virtual_seed_proto.collision_box
                 
-                -- Determine virtual seed name: standard seeds keep their name, non-standard get "-seed" appended
-                local virtual_seed_name
-                if seed_name:match("%-seed$") then
-                    virtual_seed_name = "virtual-" .. seed_name
-                else
-                    virtual_seed_name = "virtual-" .. seed_name .. "-seed"
+                -- Get actual plant prototype for tile checking
+                local plant_name = type(plant_ref) == "string" and plant_ref or (plant_ref.name or nil)
+                local plant_proto = plant_name and prototypes.entity[plant_name] or nil
+                local plant_collision_box = plant_proto and plant_proto.collision_box or virtual_collision_box
+                
+                -- Step 1: Try to find collision-free position (with wiggle in dense mode)
+                local final_pos = try_position_with_wiggle(surface, virtual_seed_name, pos, force, dense_mode)
+                
+                if not final_pos then
+                    -- No collision-free position found
+                    goto continue
                 end
                 
-                if plant_ref and prototypes.entity[virtual_seed_name] then
-                    local info = virtual_seed_info[seed_name] or {}
-                    local restrictions = info.tile_restriction or nil
-                    local tile_buildability_rules = info.tile_buildability_rules or nil
-                    -- Normalize restrictions to a flat list of tile names
-                    local normalized_restrictions = nil
-                    if restrictions then
-                        normalized_restrictions = {}
-                        for _, allowed_tile in pairs(restrictions) do
-                            if type(allowed_tile) == "table" and allowed_tile.first then
-                                table.insert(normalized_restrictions, allowed_tile.first)
-                            elseif type(allowed_tile) == "string" then
-                                table.insert(normalized_restrictions, allowed_tile)
-                            end
-                        end
+                -- Step 2: Validate tiles at the collision-free position
+                local tiles_allowed, tile_fail_reason = validate_tiles_at_position(
+                    surface, final_pos, seed_name, virtual_seed_info, 
+                    plant_proto, plant_collision_box, dense_mode
+                )
+                
+                if not tiles_allowed then
+                    -- Tiles don't meet requirements at this position
+                    if write_file_log then
+                        write_file_log("seed:tile_reject", seed_name, "pos:", final_pos.x, final_pos.y, "reason:", tile_fail_reason or "unknown")
                     end
-                    -- If no restrictions or empty, allow planting anywhere
-                    local allowed = true
-                    if normalized_restrictions and #normalized_restrictions > 0 then
-                        for _, plant_tile in ipairs(tiles) do
-                            local tile_ok = false
-                            for _, allowed_tile in ipairs(normalized_restrictions) do
-                                if plant_tile.name == allowed_tile then
-                                    tile_ok = true
-                                    break
-                                end
-                            end
-                            if not tile_ok then
-                                allowed = false
-                                break
-                            end
-                        end
-                    else
-                        -- No explicit autoplace restrictions; attempt to respect tile_buildability_rules
-                        -- Normalize plant prototype for helper: accept name or prototype object
-                        local plant_key = nil
-                        if type(plant_ref) == "string" then
-                            plant_key = plant_ref
-                        else
-                            local ok, n = pcall(function() return plant_ref and plant_ref.name end)
-                            if ok and n then plant_key = n end
-                        end
-                        local plant_proto = (plant_key and prototypes and prototypes.entity) and prototypes.entity[plant_key] or nil
-                        local allowed_tbr, dbg = tile_buildability.evaluate_tile_buildability(surface, pos, seed_name, info, plant_proto)
-                        if write_file_log then
-                            write_file_log("seed:tile_check", seed_name, dbg.center_tile or "<nil>", allowed_tbr and "allowed" or "blocked", serpent and serpent.block and serpent.block(dbg) or tostring(dbg))
-                        end
-                        if allowed_tbr == false then allowed = false end
-                    end
-                    
-                    if allowed then
-                        -- Force quality to "normal" if quality support is disabled
-                        local ghost_quality = is_quality_enabled() and quality_name or "normal"
-                        
-                        local ghost = surface.create_entity{
-                            name = "entity-ghost",
-                            position = pos,
-                            force = force,
-                            inner_name = virtual_seed_name,
-                            quality = ghost_quality,
-                            raise_built = true,
-                        }
-                        if ghost and write_file_log then
-                            write_file_log("[SEED] Created ghost:", virtual_seed_name, "quality:", ghost_quality, "ghost.quality:", ghost.quality and ghost.quality.name or "nil")
-                        end
-                        placed = placed + 1
-                        break -- Only plant one seed per tile
-                    end
+                    goto continue
                 end
-				::continue::
+                
+                -- Step 3: Everything passed - create ghost
+                -- Force quality to "normal" if quality support is disabled
+                local ghost_quality = is_quality_enabled() and quality_name or "normal"
+                
+                local ghost = surface.create_entity{
+                    name = "entity-ghost",
+                    position = final_pos,
+                    force = force,
+                    inner_name = virtual_seed_name,
+                    quality = ghost_quality,
+                    raise_built = true,
+                }
+                if ghost and write_file_log then
+                    write_file_log("[SEED] Created ghost:", virtual_seed_name, "quality:", ghost_quality, "ghost.quality:", ghost.quality and ghost.quality.name or "nil", "wiggle:", final_pos.x ~= pos.x or final_pos.y ~= pos.y)
+                end
+                placed = placed + 1
+                break -- Only plant one seed per tile
             end
-		end
+            ::continue::
+        end
     end
     rsettings.precomputed.next_seed_index = idx
     storage.agricultural_roboports[roboport.unit_number] = rsettings
