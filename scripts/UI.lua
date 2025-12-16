@@ -13,6 +13,56 @@ local function is_quality_enabled()
     return true -- Default to enabled if setting not found
 end
 
+-- Helper: Check if plant is compatible with surface conditions
+local function check_surface_conditions(plant_ref, surface)
+    -- plant_ref may be a string (name) or a prototype object; normalize to name
+    local plant_key = nil
+    if type(plant_ref) == "string" then
+        plant_key = plant_ref
+    else
+        -- userdata/table prototype: attempt to read .name
+        local ok, n = pcall(function() return plant_ref and plant_ref.name end)
+        if ok and n then plant_key = n end
+    end
+    
+    local prototypes = rawget(_G, 'prototypes')
+    local plant_proto = (plant_key and prototypes and prototypes.entity) and prototypes.entity[plant_key] or nil
+    if not plant_proto then
+        return true -- No prototype means be permissive
+    end
+    
+    if plant_proto.surface_conditions then
+        -- Iterate through all surface conditions required by this plant
+        for _, condition in ipairs(plant_proto.surface_conditions) do
+            local property_id = condition.property
+            local min_value = condition.min
+            local max_value = condition.max
+            
+            -- Get the current surface property value
+            local property_value = nil
+            if surface and type(surface.get_property) == "function" then
+                local ok, val = pcall(function() return surface.get_property(property_id) end)
+                if ok then
+                    property_value = val
+                end
+            end
+            
+            -- If we couldn't get the property value, be permissive
+            if property_value ~= nil then
+                -- Check if property value is within the required range
+                local min_check = (min_value == nil) or (property_value >= min_value)
+                local max_check = (max_value == nil) or (property_value <= max_value)
+                
+                if not min_check or not max_check then
+                    return false -- Surface condition not met
+                end
+            end
+        end
+    end
+    
+    return true -- All conditions met or no conditions
+end
+
 
 local function mode_to_switch_state(mode)
     if mode == -1 then return "left" end
@@ -175,17 +225,24 @@ script.on_event(defines.events.on_gui_opened, function(event)
                             if prototypes.item and prototypes.item[item_name] then
                                 local item_proto = prototypes.item[item_name]
                                 if item_proto.plant_result then
-                                    -- Avoid duplicates
-                                    local already_added = false
-                                    for _, existing in ipairs(seed_names) do
-                                        if existing == item_name then
-                                            already_added = true
-                                            break
+                                    -- Check if plant is compatible with current surface (performance & UX optimization)
+                                    local plant_ref = item_proto.plant_result
+                                    local surface_check_result = check_surface_conditions(plant_ref, entity.surface)
+                                    if surface_check_result then
+                                        -- Avoid duplicates
+                                        local already_added = false
+                                        for _, existing in ipairs(seed_names) do
+                                            if existing == item_name then
+                                                already_added = true
+                                                break
+                                            end
                                         end
-                                    end
-                                    if not already_added then
-                                        table.insert(seed_names, item_name)
-                                        write_file_log("[UI] Found seed from virtual entity ", entity_name, ": ", item_name)
+                                        if not already_added then
+                                            table.insert(seed_names, item_name)
+                                            write_file_log("[UI] Added compatible seed ", item_name, " for surface ", entity.surface.name)
+                                        end
+                                    else
+                                        write_file_log("[UI] Filtered out incompatible seed ", item_name, " for surface ", entity.surface.name, " (surface conditions not met)")
                                     end
                                 end
                             end
@@ -195,7 +252,7 @@ script.on_event(defines.events.on_gui_opened, function(event)
             end
         end
         
-        write_file_log("[UI] Total seeds added to filter: ", #seed_names)
+        write_file_log("[UI] Total surface-compatible seeds added to filter: ", #seed_names)
         
         -- Blacklist mode uses simple item selector (no quality), whitelist uses item-with-quality
         local quality_enabled = is_quality_enabled()
@@ -326,6 +383,27 @@ script.on_event(defines.events.on_gui_switch_state_changed, function(event)
             -- Rebuild the filter UI to switch between item and item-with-quality selectors
             local player = game.get_player(event.player_index)
             if player and player.gui.relative.agricultural_roboport_mode then
+                -- Find the roboport entity to get its surface
+                local roboport_entity = nil
+                if type(unit_key) == "number" then
+                    -- Real roboport - find by unit_number
+                    for _, surface in pairs(game.surfaces) do
+                        for _, roboport in pairs(surface.find_entities_filtered{name="agricultural-roboport"}) do
+                            if roboport.unit_number == unit_key then
+                                roboport_entity = roboport
+                                break
+                            end
+                        end
+                        if roboport_entity then break end
+                    end
+                elseif type(unit_key) == "string" and unit_key:match("^ghost_") then
+                    -- Ghost roboport - extract surface from key
+                    local _, _, surface_name = unit_key:match("^ghost_[%d%.%-]+_[%d%.%-]+_(.+)$")
+                    if surface_name and game.surfaces[surface_name] then
+                        roboport_entity = {surface = game.surfaces[surface_name]}
+                    end
+                end
+                
                 -- Find and rebuild filter table
                 local frame = player.gui.relative.agricultural_roboport_mode
                 local filter_flow = frame["agricultural_roboport_filter_flow_" .. tostring(unit_key)]
@@ -335,9 +413,9 @@ script.on_event(defines.events.on_gui_switch_state_changed, function(event)
                         local filter_controls = filter_outer["agricultural_roboport_filter_controls_row_" .. tostring(unit_key)]
                         if filter_controls then
                             local filter_table = filter_controls["agricultural_roboport_filter_table_" .. tostring(unit_key)]
-                            if filter_table then
-                                -- Rebuild filter buttons with new elem_type
-                                rebuild_filter_table(player, unit_key, filter_table, settings)
+                            if filter_table and roboport_entity then
+                                -- Rebuild filter buttons with new elem_type and surface filtering
+                                rebuild_filter_table(player, unit_key, filter_table, settings, roboport_entity.surface)
                             end
                         end
                     end
@@ -528,11 +606,11 @@ script.on_event(defines.events.on_tick, function(event)
 end)
 
 -- Helper: rebuild filter table when switching between whitelist/blacklist modes
-function rebuild_filter_table(player, unit_key, old_filter_table, settings)
+function rebuild_filter_table(player, unit_key, old_filter_table, settings, surface)
     local parent = old_filter_table.parent
     local filters = settings.filters or {}
     
-    -- Build seed names list
+    -- Build seed names list with surface compatibility filtering
     local prototypes = rawget(_G, 'prototypes')
     local seed_names = {}
     if prototypes and prototypes.entity then
@@ -542,7 +620,14 @@ function rebuild_filter_table(player, unit_key, old_filter_table, settings)
                 if items_to_place and #items_to_place > 0 then
                     for _, item_to_place in ipairs(items_to_place) do
                         local item_name = item_to_place.name
-                        if prototypes.item and prototypes.item[item_name] and prototypes.item[item_name].plant_result then
+                        local item_proto = prototypes.item and prototypes.item[item_name]
+                        if item_proto and item_proto.plant_result then
+                            -- Check surface compatibility if surface is provided
+                            if surface and not check_surface_conditions(item_proto.plant_result, surface) then
+                                write_file_log("[UI rebuild] Filtered out incompatible seed ", item_name, " for surface ", surface.name)
+                                goto skip_item
+                            end
+                            
                             local already_added = false
                             for _, existing in ipairs(seed_names) do
                                 if existing == item_name then
@@ -553,6 +638,7 @@ function rebuild_filter_table(player, unit_key, old_filter_table, settings)
                             if not already_added then
                                 table.insert(seed_names, item_name)
                             end
+                            ::skip_item::
                         end
                     end
                 end
