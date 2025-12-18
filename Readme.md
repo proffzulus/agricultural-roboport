@@ -56,6 +56,8 @@ The mod scans all game prototypes and creates virtual seed entities for any item
 - [x] Fix manual planting quality preservation
 - [x] Add support for custom seed items from other mods (non-standard naming)
 - [x] Implement blacklist filtering at item level (quality-agnostic)
+- [x] Add Vegetation Planner - manual selection tool for planning vegetation in specific areas
+- [x] Vegetation planner with independent filter configuration and shortcut integration
 - [ ] Invite community contributions for additional languages
 
 ---

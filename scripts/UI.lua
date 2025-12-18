@@ -2,7 +2,7 @@
 -- All GUI-related event handlers for agricultural-roboport mod
 
 local UI = {}
-local helpers = helpers or require('helpers')
+local util = require('scripts.util')
 local serpent = serpent or require('serpent')
 
 -- Helper to check if quality support is enabled (startup setting)
@@ -78,8 +78,190 @@ local function switch_state_to_mode(state)
     return 0
 end
 
+-- ========================================================================
+-- VEGETATION PLANNER HELPER FUNCTIONS
+-- ========================================================================
+
+-- Get planner settings from global storage (per-player)
+local function get_planner_settings(player_index)
+    storage.vegetation_planner_settings = storage.vegetation_planner_settings or {}
+    
+    if not storage.vegetation_planner_settings[player_index] then
+        storage.vegetation_planner_settings[player_index] = {
+            use_filter = false,
+            filter_invert = false,
+            filters = {},
+            force_sparse = false
+        }
+    end
+    
+    return storage.vegetation_planner_settings[player_index]
+end
+
+-- Helper: Build list of all available seed items from virtual_seed_info
+local function get_available_seeds()
+    local seeds = {}
+    
+    -- Use the existing virtual_seed_info built by Build_virtual_seed_info()
+    if storage.virtual_seed_info then
+        for seed_name, _ in pairs(storage.virtual_seed_info) do
+            table.insert(seeds, seed_name)
+        end
+    end
+    
+    -- Sort alphabetically
+    table.sort(seeds)
+    
+    return seeds
+end
+
+-- Helper: Create or update vegetation planner configuration GUI
+local function create_planner_config_gui(player, planner_settings)
+    -- Destroy existing GUI if present
+    if player.gui.screen.vegetation_planner_config then
+        player.gui.screen.vegetation_planner_config.destroy()
+    end
+    
+    -- Create frame in top-left corner (matching roboport style)
+    local frame = player.gui.screen.add{
+        type = "frame",
+        name = "vegetation_planner_config",
+        direction = "vertical",
+        caption = {"vegetation-planner.config-title"}
+    }
+    
+    -- Position in top-left
+    frame.location = {x = 10, y = 50}
+    
+    -- Use filter checkbox
+    frame.add{
+        type = "checkbox",
+        name = "vegetation_planner_use_filter",
+        state = planner_settings.use_filter or false,
+        caption = {"gui-inserter.use-filters"}
+    }
+    
+    -- Filter controls container
+    local filter_controls = frame.add{
+        type = "flow",
+        name = "vegetation_planner_filter_controls",
+        direction = "vertical"
+    }
+    
+    -- Filter mode switch (whitelist/blacklist) - horizontal flow
+    local filter_mode_flow = filter_controls.add{type = "flow", direction = "horizontal", style = "horizontal_flow"}
+    local whitelist_label = filter_mode_flow.add{
+        type = "label",
+        name = "vegetation_planner_whitelist_label",
+        caption = {"gui-inserter.whitelist"},
+        style = "caption_label"
+    }
+    local filter_switch = filter_mode_flow.add{
+        type = "switch",
+        name = "vegetation_planner_filter_invert",
+        switch_state = (planner_settings.filter_invert and "right") or "left",
+        left_label_caption = "",
+        right_label_caption = "",
+        enabled = planner_settings.use_filter or false
+    }
+    local blacklist_label = filter_mode_flow.add{
+        type = "label",
+        name = "vegetation_planner_blacklist_label",
+        caption = {"gui-inserter.blacklist"},
+        style = "caption_label"
+    }
+    
+    -- Gray out labels when disabled
+    if not (planner_settings.use_filter or false) then
+        whitelist_label.style.font_color = {r=0.5, g=0.5, b=0.5}
+        blacklist_label.style.font_color = {r=0.5, g=0.5, b=0.5}
+    end
+    
+    -- Force sparse mode checkbox (only show when dense seeding is globally enabled)
+    local dense_setting = settings.startup["agricultural-roboport-dense-seeding"]
+    if dense_setting and dense_setting.value == true then
+        filter_controls.add{
+            type = "checkbox",
+            name = "vegetation_planner_force_sparse",
+            state = planner_settings.force_sparse or false,
+            caption = {"vegetation-planner.force-sparse"}
+        }
+    end
+    
+    -- Filter slots using choose-elem-button (same as roboport!)
+    filter_controls.add{type = "label", caption = {"gui-inserter.filter"}}
+    
+    local filter_table = filter_controls.add{
+        type = "table",
+        name = "vegetation_planner_filter_table",
+        column_count = 5,
+        style = "filter_slot_table"
+    }
+    
+    -- Get available seeds for filter
+    local seed_names = get_available_seeds()
+    
+    local filters = planner_settings.filters or {}
+    local is_blacklist = planner_settings.filter_invert == true
+    local quality_enabled = is_quality_enabled()
+    
+    for i = 1, 5 do
+        local filter_entry = filters[i]
+        
+        -- Use choose-elem-button just like roboport!
+        local btn = filter_table.add{
+            type = "choose-elem-button",
+            name = "vegetation_planner_filter_" .. i,
+            elem_type = (quality_enabled and not is_blacklist) and "item-with-quality" or "item",
+            elem_filters = {
+                {filter = "name", name = seed_names}
+            },
+            enabled = planner_settings.use_filter or false,
+            style = "slot_button"
+        }
+        
+        -- Set current value if exists
+        if filter_entry then
+            local item_name, quality_name
+            
+            -- Handle both old string format and new table format
+            if type(filter_entry) == "string" then
+                item_name = filter_entry
+                quality_name = "normal"
+            elseif type(filter_entry) == "table" then
+                item_name = filter_entry.name
+                quality_name = filter_entry.quality or "normal"
+            end
+            
+            if item_name then
+                if quality_enabled and not is_blacklist then
+                    btn.elem_value = {name = item_name, quality = quality_name}
+                else
+                    btn.elem_value = item_name
+                end
+            end
+        end
+    end
+    
+    -- Set enabled state for filter controls
+    filter_controls.enabled = planner_settings.use_filter or false
+    
+    player.opened = frame
+end
+
+-- Helper: Destroy vegetation planner configuration GUI
+local function destroy_planner_config_gui(player)
+    if player.gui.screen.vegetation_planner_config then
+        player.gui.screen.vegetation_planner_config.destroy()
+    end
+end
+
+-- ========================================================================
+-- ROBOPORT UI EVENT HANDLERS
+-- ========================================================================
+
 -- Open GUI when player opens an agricultural-roboport or its ghost
-script.on_event(defines.events.on_gui_opened, function(event)
+function UI.on_gui_opened(event)
     local entity = event.entity
     local is_roboport = entity and entity.name == "agricultural-roboport"
     local is_roboport_ghost = entity and entity.name == "entity-ghost" and entity.ghost_name == "agricultural-roboport"
@@ -329,161 +511,153 @@ script.on_event(defines.events.on_gui_opened, function(event)
             end
         end
     end
-end)
+end
 
 -- Remove GUI when closed
-script.on_event(defines.events.on_gui_closed, function(event)
+function UI.on_gui_closed(event)
     local player = game.get_player(event.player_index)
     if player.gui.relative.agricultural_roboport_mode then
         player.gui.relative.agricultural_roboport_mode.destroy()
     end
-end)
-
--- Handle switch state change to set mode (support ghosts as well)
-script.on_event(defines.events.on_gui_switch_state_changed, function(event)
-    local element = event.element
-    if not (element and element.valid) then return end
-    -- Handle roboport mode switch
-    -- When updating settings from UI, always update the table (never replace with nil or primitive)
-    if element.name:find("^agricultural_roboport_mode_switch_") then
-        local unit_key = element.name:match("^agricultural_roboport_mode_switch_(.+)$")
-        if unit_key then
-            local num_key = tonumber(unit_key)
-            if num_key then unit_key = num_key end
-            if not storage.agricultural_roboports[unit_key] then
-                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
-            end
-            local settings = storage.agricultural_roboports[unit_key]
-            local new_mode = switch_state_to_mode(element.switch_state)
-            settings.mode = new_mode
-        end
-    elseif element.name:find("^agricultural_roboport_filter_invert_switch_") then
-        local unit_key = element.name:match("^agricultural_roboport_filter_invert_switch_(.+)$")
-        if unit_key then
-            local num_key = tonumber(unit_key)
-            if num_key then unit_key = num_key end
-            if not storage.agricultural_roboports[unit_key] then
-                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
-            end
-            local settings = storage.agricultural_roboports[unit_key]
-            local invert = (element.switch_state == "right")
-            settings.filter_invert = invert
-            
-            -- When switching to blacklist mode, strip quality from all filters (keep only item names)
-            if invert then
-                local filters = settings.filters or {}
-                for i = 1, #filters do
-                    if type(filters[i]) == "table" and filters[i].name then
-                        filters[i] = {name = filters[i].name, quality = "normal"}
-                    end
-                end
-                settings.filters = filters
-            end
-            
-            -- Rebuild the filter UI to switch between item and item-with-quality selectors
-            local player = game.get_player(event.player_index)
-            if player and player.gui.relative.agricultural_roboport_mode then
-                -- Find the roboport entity to get its surface
-                local roboport_entity = nil
-                if type(unit_key) == "number" then
-                    -- Real roboport - find by unit_number
-                    for _, surface in pairs(game.surfaces) do
-                        for _, roboport in pairs(surface.find_entities_filtered{name="agricultural-roboport"}) do
-                            if roboport.unit_number == unit_key then
-                                roboport_entity = roboport
-                                break
-                            end
-                        end
-                        if roboport_entity then break end
-                    end
-                elseif type(unit_key) == "string" and unit_key:match("^ghost_") then
-                    -- Ghost roboport - extract surface from key
-                    local _, _, surface_name = unit_key:match("^ghost_[%d%.%-]+_[%d%.%-]+_(.+)$")
-                    if surface_name and game.surfaces[surface_name] then
-                        roboport_entity = {surface = game.surfaces[surface_name]}
-                    end
-                end
-                
-                -- Find and rebuild filter table
-                local frame = player.gui.relative.agricultural_roboport_mode
-                local filter_flow = frame["agricultural_roboport_filter_flow_" .. tostring(unit_key)]
-                if filter_flow then
-                    local filter_outer = filter_flow["agricultural_roboport_filter_outer_flow_" .. tostring(unit_key)]
-                    if filter_outer then
-                        local filter_controls = filter_outer["agricultural_roboport_filter_controls_row_" .. tostring(unit_key)]
-                        if filter_controls then
-                            local filter_table = filter_controls["agricultural_roboport_filter_table_" .. tostring(unit_key)]
-                            if filter_table and roboport_entity then
-                                -- Rebuild filter buttons with new elem_type and surface filtering
-                                rebuild_filter_table(player, unit_key, filter_table, settings, roboport_entity.surface)
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-end)
-
--- Handle radiobutton state change for 'Seed in logistic area only'
-script.on_event(defines.events.on_gui_checked_state_changed, function(event)
-    local element = event.element
-    if not (element and element.valid) then return end
-    -- Handle 'Use filters' checkbox
-    if element.name:find("^agricultural_roboport_use_filter_checkbox_") then
-        local unit_key = element.name:match("^agricultural_roboport_use_filter_checkbox_(.+)$")
-        if unit_key then
-            local num_key = tonumber(unit_key)
-            if num_key then unit_key = num_key end
-            if not storage.agricultural_roboports[unit_key] then
-                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
-            end
-            local settings = storage.agricultural_roboports[unit_key]
-            local new_state = (element.state == true)
-            settings.use_filter = new_state
-            write_file_log("[UI] Use filters checkbox for key=", tostring(unit_key), "state=", tostring(new_state))
-            -- Gray out or enable filter controls accordingly
-            local parent = element.parent and element.parent.parent -- use_filter_row's parent is filter_outer_flow
-            if parent then
-                local controls_row = parent["agricultural_roboport_filter_controls_row_" .. tostring(unit_key)]
-                if controls_row then
-                    for _, child in pairs(controls_row.children) do
-                        if child.type == "flow" then
-                            for _, subchild in pairs(child.children) do
-                                subchild.enabled = new_state
-                            end
-                        elseif child.type == "table" then
-                            -- Use helper for button state and filter compression
-                            local filters = settings.filters or {}
-                            update_filter_buttons_and_compress_filters(unit_key, child, new_state, filters)
-                        else
-                            child.enabled = new_state
-                        end
-                    end
-                end
-            end
-        end
-    -- Handle 'Seed in logistic area only' checkbox
-    elseif element.name:find("^agricultural_roboport_seed_logistic_only_") then
-        local unit_key = element.name:match("^agricultural_roboport_seed_logistic_only_(.+)$")
-        if unit_key then
-            local num_key = tonumber(unit_key)
-            if num_key then unit_key = num_key end
-            if not storage.agricultural_roboports[unit_key] then
-                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
-            end
-            local settings = storage.agricultural_roboports[unit_key]
-            settings.seed_logistic_only = element.state
-        end
-    end
-end)
+end
 
 -- Handle filter choose-elem-button (both item and quality selectors)
-script.on_event(defines.events.on_gui_elem_changed, function(event)
+function UI.on_gui_elem_changed(event)
     local element = event.element
     if not (element and element.valid) then return end
     
-    -- Handle combined item-with-quality selector OR simple item selector
+    -- Handle vegetation planner filter selection
+    if element.name:find("^vegetation_planner_filter_") then
+        local idx = tonumber(element.name:match("^vegetation_planner_filter_(%d+)$"))
+        if idx then
+            local planner_settings = get_planner_settings(event.player_index)
+            local filters = planner_settings.filters or {}
+            if type(filters) ~= "table" then filters = {} end
+            
+            local quality_enabled = is_quality_enabled()
+            local is_blacklist = planner_settings.filter_invert == true
+            
+            if element.elem_value then
+                local item_name, quality_name
+                
+                if type(element.elem_value) == "table" then
+                    -- Item-with-quality mode
+                    item_name = element.elem_value.name
+                    quality_name = element.elem_value.quality or "normal"
+                else
+                    -- Simple item mode
+                    item_name = element.elem_value
+                    quality_name = "normal"
+                end
+                
+                -- Check for duplicates (same logic as roboport)
+                local is_duplicate = false
+                if is_blacklist then
+                    -- Blacklist: check if item name already exists (quality doesn't matter)
+                    for i = 1, 5 do
+                        if i ~= idx and filters[i] then
+                            local other_entry = filters[i]
+                            local other_name = type(other_entry) == "table" and other_entry.name or other_entry
+                            if other_name == item_name then
+                                is_duplicate = true
+                                break
+                            end
+                        end
+                    end
+                else
+                    -- Whitelist: check exact item+quality combination
+                    for i = 1, 5 do
+                        if i ~= idx and filters[i] then
+                            local other_entry = filters[i]
+                            local other_name = type(other_entry) == "table" and other_entry.name or other_entry
+                            local other_quality = type(other_entry) == "table" and (other_entry.quality or "normal") or "normal"
+                            if other_name == item_name and other_quality == quality_name then
+                                is_duplicate = true
+                                break
+                            end
+                        end
+                    end
+                end
+                
+                if is_duplicate then
+                    -- Reject duplicate - clear the selection
+                    element.elem_value = nil
+                    filters[idx] = nil
+                else
+                    -- Store with proper format
+                    if is_blacklist then
+                        filters[idx] = {name = item_name, quality = "normal"}
+                    elseif quality_enabled then
+                        filters[idx] = {name = item_name, quality = quality_name}
+                    else
+                        filters[idx] = {name = item_name, quality = "normal"}
+                    end
+                end
+            else
+                -- Clear filter
+                filters[idx] = nil
+            end
+            
+            -- Compress filters
+            local new_filters = {}
+            for i = 1, 5 do
+                if filters[i] ~= nil then
+                    table.insert(new_filters, filters[i])
+                end
+            end
+            for i = #new_filters + 1, 5 do
+                new_filters[i] = nil
+            end
+            planner_settings.filters = new_filters
+            
+            -- Update UI buttons to reflect compressed filters
+            local player = game.get_player(event.player_index)
+            if player and player.valid then
+                local filter_table = element.parent
+                if filter_table and filter_table.valid then
+                    -- Update all filter buttons with compressed array
+                    for i = 1, 5 do
+                        local btn = filter_table["vegetation_planner_filter_" .. i]
+                        if btn and btn.valid then
+                            local filter_entry = new_filters[i]
+                            if filter_entry then
+                                local item_name, quality_name
+                                
+                                if type(filter_entry) == "string" then
+                                    item_name = filter_entry
+                                    quality_name = "normal"
+                                elseif type(filter_entry) == "table" then
+                                    item_name = filter_entry.name
+                                    quality_name = filter_entry.quality or "normal"
+                                end
+                                
+                                if item_name then
+                                    if quality_enabled and not is_blacklist then
+                                        btn.elem_value = {name = item_name, quality = quality_name}
+                                    else
+                                        btn.elem_value = item_name
+                                    end
+                                end
+                            else
+                                -- Clear empty slots
+                                btn.elem_value = nil
+                            end
+                        end
+                    end
+                end
+            end
+            
+            -- Debug logging
+            if quality_enabled and type(element.elem_value) == "table" then
+                write_file_log("[Vegetation Planner] Selected filter index=", tostring(idx), "value=", tostring(element.elem_value and (element.elem_value.name .. "@" .. element.elem_value.quality) or "nil"))
+            else
+                write_file_log("[Vegetation Planner] Selected filter index=", tostring(idx), "value=", tostring(element.elem_value or "nil"))
+            end
+        end
+        return
+    end
+    
+    -- Handle agricultural roboport filter selection (item-with-quality selector OR simple item selector)
     if element.name:find("^agricultural_roboport_filter_") then
         local unit_key, idx = element.name:match("^agricultural_roboport_filter_(.+)_(%d+)$")
         if unit_key and idx then
@@ -589,11 +763,11 @@ script.on_event(defines.events.on_gui_elem_changed, function(event)
             end
         end
     end
-end)
+end
 
 -- Handle quality dropdown selection changes
 -- Deferred elem_value setter for choose-elem-buttons
-script.on_event(defines.events.on_tick, function(event)
+function UI.on_tick(event)
     if not _G._agroport_deferred_elem then return end
     for player_index, btns in pairs(_G._agroport_deferred_elem) do
         for _, entry in pairs(btns) do
@@ -601,9 +775,9 @@ script.on_event(defines.events.on_tick, function(event)
                 entry.button.elem_value = entry.value
             end
         end
-        _G._agroport_deferred_elem[player_index] = nil
+        _G._agroport_deferred_elem[player.index] = nil
     end
-end)
+end
 
 -- Helper: rebuild filter table when switching between whitelist/blacklist modes
 function rebuild_filter_table(player, unit_key, old_filter_table, settings, surface)
@@ -771,6 +945,351 @@ function update_filter_buttons_and_compress_filters(unit_key, filter_table, use_
     local settings = storage.agricultural_roboports[unit_key]
     settings.filters = compressed_filters
     return compressed_filters
+end
+
+-- Event: Cursor stack changed (show/hide vegetation planner GUI)
+function UI.on_player_cursor_stack_changed(event)
+    local player = game.get_player(event.player_index)
+    if not player then return end
+    
+    local cursor = player.cursor_stack
+    if cursor and cursor.valid_for_read and cursor.name == "vegetation-planner" then
+        -- Check if player has researched the technology
+        if not player.force.technologies["agricultural-soil-analysis"].researched then
+            -- Tech not researched - clear cursor
+            player.clear_cursor()
+            player.print({"vegetation-planner.tech-not-researched"})
+            player.set_shortcut_toggled("vegetation-planner", false)
+            return
+        end
+        
+        -- Player picked up the vegetation planner - show GUI and toggle shortcut
+        local planner_settings = get_planner_settings(event.player_index)
+        create_planner_config_gui(player, planner_settings)
+        player.set_shortcut_toggled("vegetation-planner", true)
+    else
+        -- Player cleared cursor or switched items - hide GUI and untoggle shortcut
+        destroy_planner_config_gui(player)
+        player.set_shortcut_toggled("vegetation-planner", false)
+    end
+end
+
+-- Handle shortcut click (toggle tool in/out of cursor)
+function UI.on_lua_shortcut(event)
+    if event.prototype_name ~= "vegetation-planner" then return end
+    
+    local player = game.get_player(event.player_index)
+    if not player then return end
+    
+    -- Check if player has researched the technology
+    if not player.force.technologies["agricultural-soil-analysis"].researched then
+        player.print({"vegetation-planner.tech-not-researched"})
+        player.set_shortcut_toggled("vegetation-planner", false)
+        return
+    end
+    
+    local cursor = player.cursor_stack
+    if cursor and cursor.valid_for_read and cursor.name == "vegetation-planner" then
+        -- Tool is already in cursor - clear it
+        player.clear_cursor()
+        player.set_shortcut_toggled("vegetation-planner", false)
+    else
+        -- Give player the tool
+        player.clear_cursor()
+        player.cursor_stack.set_stack{name = "vegetation-planner", count = 1}
+        player.set_shortcut_toggled("vegetation-planner", true)
+    end
+end
+
+-- Extend existing GUI event handlers to handle both roboport and vegetation planner
+-- (Merged handler - handles both roboport and vegetation planner checkboxes)
+function UI.on_gui_checked_state_changed(event)
+    if not event.element or not event.element.valid then return end
+    local element = event.element
+    local element_name = element.name
+    
+    -- Handle vegetation planner elements
+    if element_name and element_name:match("^vegetation_planner_") then
+        local player = game.get_player(event.player_index)
+        if not player then return end
+        
+        local planner_settings = get_planner_settings(event.player_index)
+        
+        if element_name == "vegetation_planner_use_filter" then
+            planner_settings.use_filter = event.element.state
+            
+            -- Update filter controls enabled state in real-time
+            local frame = player.gui.screen.vegetation_planner_config
+            if frame then
+                local filter_controls = frame.vegetation_planner_filter_controls
+                if filter_controls then
+                    filter_controls.enabled = event.element.state
+                    
+                    -- Update switch enabled state and label colors
+                    local filter_mode_flow = filter_controls.children[1]
+                    if filter_mode_flow then
+                        local whitelist_label = filter_mode_flow.vegetation_planner_whitelist_label
+                        local switch = filter_mode_flow.vegetation_planner_filter_invert
+                        local blacklist_label = filter_mode_flow.vegetation_planner_blacklist_label
+                        
+                        if switch and switch.valid then
+                            switch.enabled = event.element.state
+                        end
+                        
+                        -- Update label colors
+                        if whitelist_label and blacklist_label then
+                            if event.element.state then
+                                whitelist_label.style.font_color = {r=1, g=1, b=1}
+                                blacklist_label.style.font_color = {r=1, g=1, b=1}
+                            else
+                                whitelist_label.style.font_color = {r=0.5, g=0.5, b=0.5}
+                                blacklist_label.style.font_color = {r=0.5, g=0.5, b=0.5}
+                            end
+                        end
+                    end
+                    
+                    -- Also update individual filter buttons
+                    local filter_table = filter_controls.vegetation_planner_filter_table
+                    if filter_table then
+                        for i = 1, 5 do
+                            local btn = filter_table["vegetation_planner_filter_" .. i]
+                            if btn and btn.valid then
+                                btn.enabled = event.element.state
+                            end
+                        end
+                    end
+                end
+            end
+        elseif element_name == "vegetation_planner_force_sparse" then
+            planner_settings.force_sparse = event.element.state
+        end
+    -- Handle agricultural roboport 'Use filters' checkbox
+    elseif element_name and element_name:find("^agricultural_roboport_use_filter_checkbox_") then
+        local unit_key = element_name:match("^agricultural_roboport_use_filter_checkbox_(.+)$")
+        if unit_key then
+            local num_key = tonumber(unit_key)
+            if num_key then unit_key = num_key end
+            if not storage.agricultural_roboports[unit_key] then
+                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
+            end
+            local settings = storage.agricultural_roboports[unit_key]
+            local new_state = (element.state == true)
+            settings.use_filter = new_state
+            write_file_log("[UI] Use filters checkbox for key=", tostring(unit_key), "state=", tostring(new_state))
+            -- Gray out or enable filter controls accordingly
+            local parent = element.parent and element.parent.parent
+            if parent then
+                local controls_row = parent["agricultural_roboport_filter_controls_row_" .. tostring(unit_key)]
+                if controls_row then
+                    for _, child in pairs(controls_row.children) do
+                        if child.type == "flow" then
+                            for _, subchild in pairs(child.children) do
+                                subchild.enabled = new_state
+                            end
+                        elseif child.type == "table" then
+                            local filters = settings.filters or {}
+                            update_filter_buttons_and_compress_filters(unit_key, child, new_state, filters)
+                        else
+                            child.enabled = new_state
+                        end
+                    end
+                end
+            end
+        end
+    -- Handle 'Seed in logistic area only' checkbox
+    elseif element_name and element_name:find("^agricultural_roboport_seed_logistic_only_") then
+        local unit_key = element_name:match("^agricultural_roboport_seed_logistic_only_(.+)$")
+        if unit_key then
+            local num_key = tonumber(unit_key)
+            if num_key then unit_key = num_key end
+            if not storage.agricultural_roboports[unit_key] then
+                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
+            end
+            local settings = storage.agricultural_roboports[unit_key]
+            settings.seed_logistic_only = element.state
+        end
+    end
+end
+
+-- Extend GUI switch handler to handle both roboport and vegetation planner
+-- (Merged handler - handles both systems)
+function UI.on_gui_switch_state_changed(event)
+    if not event.element or not event.element.valid then return end
+    local element = event.element
+    local element_name = element.name
+    
+    -- Handle vegetation planner elements
+    if element_name and element_name:match("^vegetation_planner_") then
+        if element_name == "vegetation_planner_filter_invert" then
+            local player = game.get_player(event.player_index)
+            local planner_settings = get_planner_settings(event.player_index)
+            local old_invert = planner_settings.filter_invert
+            planner_settings.filter_invert = (element.switch_state == "right")
+            
+            -- When switching to blacklist mode, strip quality from all filters (keep only item names)
+            if planner_settings.filter_invert and not old_invert then
+                local filters = planner_settings.filters or {}
+                for i = 1, #filters do
+                    if type(filters[i]) == "table" and filters[i].name then
+                        filters[i] = {name = filters[i].name, quality = "normal"}
+                    end
+                end
+                planner_settings.filters = filters
+            end
+            
+            -- Rebuild filter table to switch between item-with-quality and item elem_type
+            if player and player.gui.screen.vegetation_planner_config then
+                local frame = player.gui.screen.vegetation_planner_config
+                local filter_controls = frame.vegetation_planner_filter_controls
+                if filter_controls then
+                    local old_filter_table = filter_controls.vegetation_planner_filter_table
+                    if old_filter_table then
+                        -- Get current filters
+                        local filters = planner_settings.filters or {}
+                        local is_blacklist = planner_settings.filter_invert
+                        local quality_enabled = is_quality_enabled()
+                        local use_filter = planner_settings.use_filter or false
+                        
+                        -- Destroy old table
+                        old_filter_table.destroy()
+                        
+                        -- Create new table with correct elem_type
+                        local new_filter_table = filter_controls.add{
+                            type = "table",
+                            name = "vegetation_planner_filter_table",
+                            column_count = 5,
+                            style = "filter_slot_table"
+                        }
+                        
+                        -- Get available seeds
+                        local seed_names = get_available_seeds()
+                        
+                        -- Create buttons with correct elem_type
+                        for i = 1, 5 do
+                            local filter_entry = filters[i]
+                            
+                            local btn = new_filter_table.add{
+                                type = "choose-elem-button",
+                                name = "vegetation_planner_filter_" .. i,
+                                elem_type = (quality_enabled and not is_blacklist) and "item-with-quality" or "item",
+                                elem_filters = {
+                                    {filter = "name", name = seed_names}
+                                },
+                                enabled = use_filter,
+                                style = "slot_button"
+                            }
+                            
+                            -- Set current value if exists
+                            if filter_entry then
+                                local item_name, quality_name
+                                
+                                if type(filter_entry) == "string" then
+                                    item_name = filter_entry
+                                    quality_name = "normal"
+                                elseif type(filter_entry) == "table" then
+                                    item_name = filter_entry.name
+                                    quality_name = filter_entry.quality or "normal"
+                                end
+                                
+                                if item_name then
+                                    if quality_enabled and not is_blacklist then
+                                        -- Whitelist with quality: use item-with-quality
+                                        btn.elem_value = {name = item_name, quality = quality_name}
+                                    else
+                                        -- Blacklist or no quality: use simple item name
+                                        btn.elem_value = item_name
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    -- Handle roboport mode switch
+    elseif element_name and element_name:find("^agricultural_roboport_mode_switch_") then
+        local unit_key = element_name:match("^agricultural_roboport_mode_switch_(.+)$")
+        if unit_key then
+            local num_key = tonumber(unit_key)
+            if num_key then unit_key = num_key end
+            if not storage.agricultural_roboports[unit_key] then
+                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
+            end
+            local settings = storage.agricultural_roboports[unit_key]
+            local new_mode = switch_state_to_mode(element.switch_state)
+            settings.mode = new_mode
+        end
+    -- Handle filter invert switch
+    elseif element_name and element_name:find("^agricultural_roboport_filter_invert_switch_") then
+        local unit_key = element_name:match("^agricultural_roboport_filter_invert_switch_(.+)$")
+        if unit_key then
+            local num_key = tonumber(unit_key)
+            if num_key then unit_key = num_key end
+            if not storage.agricultural_roboports[unit_key] then
+                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
+            end
+            local settings = storage.agricultural_roboports[unit_key]
+            local invert = (element.switch_state == "right")
+            settings.filter_invert = invert
+            
+            -- When switching to blacklist mode, strip quality from all filters (keep only item names)
+            if invert then
+                local filters = settings.filters or {}
+                for i = 1, #filters do
+                    if type(filters[i]) == "table" and filters[i].name then
+                        filters[i] = {name = filters[i].name, quality = "normal"}
+                    end
+                end
+                settings.filters = filters
+            end
+            
+            -- Rebuild the filter UI to switch between item and item-with-quality selectors
+            local player = game.get_player(event.player_index)
+            if player and player.gui.relative.agricultural_roboport_mode then
+                -- Find the roboport entity to get its surface
+                local roboport_entity = nil
+                if type(unit_key) == "number" then
+                    for _, surface in pairs(game.surfaces) do
+                        for _, roboport in pairs(surface.find_entities_filtered{name="agricultural-roboport"}) do
+                            if roboport.unit_number == unit_key then
+                                roboport_entity = roboport
+                                break
+                            end
+                        end
+                        if roboport_entity then break end
+                    end
+                elseif type(unit_key) == "string" and unit_key:match("^ghost_") then
+                    local _, _, surface_name = unit_key:match("^ghost_[%d%.%-]+_[%d%.%-]+_(.+)$")
+                    if surface_name and game.surfaces[surface_name] then
+                        roboport_entity = {surface = game.surfaces[surface_name]}
+                    end
+                end
+                
+                -- Find and rebuild filter table
+                local frame = player.gui.relative.agricultural_roboport_mode
+                local filter_flow = frame["agricultural_roboport_filter_flow_" .. tostring(unit_key)]
+                if filter_flow then
+                    local filter_outer = filter_flow["agricultural_roboport_filter_outer_flow_" .. tostring(unit_key)]
+                    if filter_outer then
+                        local filter_controls = filter_outer["agricultural_roboport_filter_controls_row_" .. tostring(unit_key)]
+                        if filter_controls then
+                            local filter_table = filter_controls["agricultural_roboport_filter_table_" .. tostring(unit_key)]
+                            if filter_table and roboport_entity then
+                                rebuild_filter_table(player, unit_key, filter_table, settings, roboport_entity.surface)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Extend GUI click handler to handle both roboport and vegetation planner
+-- (Merged handler - handles both systems)
+function UI.on_gui_click(event)
+    -- Vegetation planner and roboport use choose-elem-button, switches, and checkboxes
+    -- No click handlers needed
 end
 
 return UI

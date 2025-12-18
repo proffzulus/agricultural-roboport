@@ -19,6 +19,22 @@ end
 -- Helper: Try to place entity at position with small adjustments (wiggle) if exact position fails
 -- Returns: adjusted_position (or nil if all attempts fail), number_of_collision_checks_performed
 local function try_position_with_wiggle(surface, entity_name, base_pos, force, dense_mode)
+    -- Get the virtual seed entity's collision box to determine check area
+    local entity_proto = prototypes.entity[entity_name]
+    local check_x_extent = 1.4 -- Default for sparse mode
+    local check_y_extent = 1.4
+    
+    if entity_proto and entity_proto.collision_box then
+        local cbox = entity_proto.collision_box
+        if cbox and type(cbox) == "table" and cbox[1] and cbox[2] then
+            -- Calculate exact extents from collision box (preserve aspect ratio)
+            local width = math.abs((cbox[2][1] or 0) - (cbox[1][1] or 0))
+            local height = math.abs((cbox[2][2] or 0) - (cbox[1][2] or 0))
+            check_x_extent = width / 2
+            check_y_extent = height / 2
+        end
+    end
+    
     -- In dense mode, try sub-tile offsets; in sparse mode, only try exact position
     local offsets = dense_mode and {
         {0, 0},           -- Exact position first
@@ -36,13 +52,18 @@ local function try_position_with_wiggle(surface, entity_name, base_pos, force, d
     for _, offset in ipairs(offsets) do
         local test_pos = {x = base_pos.x + offset[1], y = base_pos.y + offset[2]}
         checks_performed = checks_performed + 1
+        
+        -- Use can_place_entity with explicit build_check_type for precise collision detection
         if surface.can_place_entity{
             name = entity_name,
             position = test_pos,
-            force = force
+            force = force,
+            build_check_type = defines.build_check_type.manual_ghost
         } then
             return test_pos, checks_performed
         end
+        
+        ::continue_offset::
     end
     
     return nil, checks_performed  -- All attempts failed, but return check count
@@ -59,10 +80,18 @@ local function validate_tiles_at_position(surface, position, seed_name, virtual_
     local tiles = {}
     if dense_mode and plant_collision_box and type(plant_collision_box) == "table" and plant_collision_box[1] and plant_collision_box[2] then
         -- In dense mode, check all tiles covered by the PLANT's collision box
-        local x1 = math.floor(position.x + (plant_collision_box[1][1] or 0))
-        local y1 = math.floor(position.y + (plant_collision_box[1][2] or 0))
-        local x2 = math.ceil(position.x + (plant_collision_box[2][1] or 0))
-        local y2 = math.ceil(position.y + (plant_collision_box[2][2] or 0))
+        -- Calculate world-space collision box boundaries
+        local box_left = position.x + (plant_collision_box[1][1] or 0)
+        local box_top = position.y + (plant_collision_box[1][2] or 0)
+        local box_right = position.x + (plant_collision_box[2][1] or 0)
+        local box_bottom = position.y + (plant_collision_box[2][2] or 0)
+        
+        -- Find all tiles that the collision box overlaps (even partially)
+        -- Use floor for left/top edges and floor for right/bottom edges to ensure we check all overlapping tiles
+        local x1 = math.floor(box_left)
+        local y1 = math.floor(box_top)
+        local x2 = math.floor(box_right)
+        local y2 = math.floor(box_bottom)
         
         for x = x1, x2 do
             for y = y1, y2 do
@@ -89,6 +118,18 @@ local function validate_tiles_at_position(surface, position, seed_name, virtual_
                 table.insert(normalized_restrictions, allowed_tile)
             end
         end
+    end
+    
+    -- Check for resource tiles (avoid placing on ore patches, etc.)
+    -- Check center tile for resources
+    local center_tile = surface.get_tile(position)
+    local resource_count = surface.count_entities_filtered{
+        position = position,
+        radius = 1.5,
+        type = "resource"
+    }
+    if resource_count > 0 then
+        return false, "resource_tile"
     end
     
     -- First check tile_restriction (tile names) if present
@@ -637,3 +678,10 @@ check_surface_conditions = function(plant_ref, surface)
     if write_file_log then write_file_log("check_surface_conditions:ok", plant_key or tostring(plant_ref) or "<nil>") end
     return true
 end
+
+-- Export helper functions for use by other modules (e.g., vegetation-planner)
+_G.try_position_with_wiggle = try_position_with_wiggle
+_G.validate_tiles_at_position = validate_tiles_at_position
+_G.check_surface_conditions = check_surface_conditions
+_G.is_quality_enabled = is_quality_enabled
+_G.Build_virtual_seed_info = Build_virtual_seed_info

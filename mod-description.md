@@ -8,7 +8,9 @@ Agricultural Roboport automates seeding and harvesting inside a roboport area. I
 Key features
 ------------
 - Automatic seeding and harvesting modes (Harvest only / Harvest & Seed).
+- **Vegetation Planner**: Manual selection tool for planning vegetation in specific areas - draw boxes to seed or clear (Alt-select).
 - Per-roboport filters (whitelist / blacklist) to control which crops are planted.
+- Independent filter configuration for vegetation planner tool.
 - Option to seed only inside logistic range (respect logistics coverage).
 - Virtual-seed system: plants are placed as ghosts and built by robots.
 - **Quality support**: Plants retain quality from seeds and display quality badges. Toggle quality tracking with startup setting.
@@ -28,6 +30,11 @@ How it works (player summary)
    - On each scheduler tick it processes a small batch of positions (configurable), issuing deconstruction orders for harvestable plants and placing seed ghosts where needed.
 4. Work is spread over many ticks (TDM), so the mod scales to large surfaces with controlled CPU use.
 5. **Quality tracking**: When enabled, plants preserve seed quality and can mutate during harvest (configurable rates).
+6. **Vegetation Planner**: Already got construction robots, but have no Roboports? No problem, Vegetation Planner is your new best friend!
+   - Manual selection tool for planning vegetation in specific areas
+   - Access via shortcut bar (ALT+V) after researching "Soil Analysis"
+   - Independent filter configuration for precise control
+   - Perfect for decorative landscaping and targeted crop placement
 
 Settings (what to tweak)
 ------------------------
@@ -62,6 +69,8 @@ Tips
 - **Quality farming**: Enable quality support to track seed quality through the growth cycle and configure mutation rates for breeding higher-tier plants.
 - Adjust quality improvement chance to control upgrade vs downgrade probability during mutations.
 - **Automatic mod compatibility**: The mod automatically detects all plantable items from any mod - works out of the box with Boompuff Agriculture, Space Age planets, and any other agricultural mods.
+- **Vegetation Planner**: Use the planner tool (ALT+V) for manual control over specific areas. Great for decorative landscaping or precision farming.
+- **Force sparse mode in planner**: Override dense seeding setting per selection area using the planner's configuration.
 
 Compatibility & translations
 ----------------------------

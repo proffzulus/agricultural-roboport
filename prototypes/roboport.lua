@@ -55,7 +55,7 @@ local agricultural_roboport_technology = {
 			recipe = "agricultural-roboport"
 		}
 	},
-	prerequisites ={"construction-robotics", "agriculture"},
+	prerequisites ={"construction-robotics", "agriculture", "agricultural-soil-analysis"},
 	unit = {
 		count = 200,
 		ingredients = {

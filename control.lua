@@ -6,34 +6,20 @@ serpent = serpent or {}
 -- and cause errors (e.g. `game.write_file` missing). Leave them alone so
 -- the engine-provided globals are used when available.
 
-function write_file_log(...)
-    local ok = false
-    if settings and settings.global and settings.global["agricultural-roboport-debug"] then
-        ok = settings.global["agricultural-roboport-debug"].value
-    end
-    if not ok then return end
-    if not (helpers and helpers.write_file) then return end
-    local parts = {}
-    local n = select('#', ...)
-    for i = 1, n do
-        local v = select(i, ...)
-        if type(v) == "string" then
-            parts[#parts+1] = v
-        else
-            if serpent and serpent.block then
-                parts[#parts+1] = serpent.block(v)
-            else
-                parts[#parts+1] = tostring(v)
-            end
-        end
-    end
-    helpers.write_file("agricultural-roboport.log", table.concat(parts, " ") .. "\n", true)
-end
-
-require("scripts.agricultural-roboport")
-require("scripts.UI")
+-- Import refactored modules
+local util = require("scripts.util")
+local tdm = require("scripts.tdm")
+local UI = require("scripts.UI")
 local tile_buildability = require("scripts.tile_buildability")
+local vegetation_planner = require("scripts.vegetation-planner")
+local event_subscriptions = require("scripts.event-subscriptions")
+require("scripts.agricultural-roboport")
 require("debug-commands")
+
+-- Make write_file_log global for all modules to use
+function write_file_log(...)
+    return util.write_file_log(...)
+end
 
 -- Quality order and helpers
 local QUALITY_BY_LEVEL = {
@@ -50,15 +36,9 @@ for lvl, name in pairs(QUALITY_BY_LEVEL) do
 	if lvl > MAX_QUALITY_LEVEL then MAX_QUALITY_LEVEL = lvl end
 end
 
-local function clamp(v, lo, hi)
-	if v < lo then return lo end
-	if v > hi then return hi end
-	return v
-end
-
 local function adjacent_quality_name(current_name, dir)
 	local idx = QUALITY_LEVEL[current_name] or 0
-	local new_idx = clamp(idx + dir, 0, MAX_QUALITY_LEVEL)
+	local new_idx = util.clamp(idx + dir, 0, MAX_QUALITY_LEVEL)
 	return QUALITY_BY_LEVEL[new_idx]
 end
 
@@ -74,197 +54,9 @@ local function is_quality_enabled()
     return true -- Default to enabled if setting not found
 end
 
--- Helper to count table entries
-local function table_size(t)
-    local count = 0
-    for _ in pairs(t) do count = count + 1
-    end
-    return count
-end
-
--- TDM configuration: read from runtime-global settings (fall back to defaults)
-local DEFAULT_TDM_PERIOD = 300 -- ticks (5 seconds)
-local DEFAULT_TDM_TICK_INTERVAL = 10 -- how often (in ticks) we wake to process a batch
-
-local function read_tdm_settings()
-    -- Use the Factorio 2.0+ `settings` global directly
-    if settings and settings.global then
-        local p = settings.global["agricultural-roboport-tdm-period"]
-        local ti = settings.global["agricultural-roboport-tdm-tick-interval"]
-        return (p and p.value) or DEFAULT_TDM_PERIOD, (ti and ti.value) or DEFAULT_TDM_TICK_INTERVAL
-    end
-    return DEFAULT_TDM_PERIOD, DEFAULT_TDM_TICK_INTERVAL
-end
-
-local TDM_PERIOD, TDM_TICK_INTERVAL = read_tdm_settings()
-
--- TDM runtime state is stored under storage._tdm. Fields:
---   version: increments whenever the roboport list changes
---   snapshot_version: version when keys snapshot was built
---   keys: immutable snapshot array of numeric keys used for current processing
---   next_index: 1-based index in keys for the next batch start
---   registered_interval: interval currently registered with script.on_nth_tick
-local function tdm_mark_dirty()
-    storage._tdm = storage._tdm or {}
-    storage._tdm.version = (storage._tdm.version or 0) + 1
-end
-
-
--- The actual TDM handler is defined as a named function so it can be (re)registered
--- Forward-declare process function so handlers compiled earlier reference the same local
-local process_agricultural_roboport
-
-local function tdm_tick_handler(event)
-    -- Ensure required _tdm fields exist (some code paths may have created an empty table)
-    storage._tdm = storage._tdm or {}
-    storage._tdm.version = storage._tdm.version or 0
-    storage._tdm.snapshot_version = storage._tdm.snapshot_version or 0
-    storage._tdm.keys = storage._tdm.keys or {}
-    storage._tdm.next_index = storage._tdm.next_index or 1
-
-    -- Rebuild immutable snapshot of numeric keys if storage changed since last snapshot
-    if storage._tdm.snapshot_version ~= storage._tdm.version then
-        local keys = {}
-        for k, _ in pairs(storage.agricultural_roboports) do
-            if type(k) == "number" then table.insert(keys, k) end
-        end
-        table.sort(keys)
-        storage._tdm.keys = keys
-        storage._tdm.snapshot_version = storage._tdm.version
-        -- clamp next_index
-        if storage._tdm.next_index < 1 then storage._tdm.next_index = 1 end
-        if storage._tdm.next_index > #keys then storage._tdm.next_index = 1 end
-        if write_file_log then
-            write_file_log("[TDM] Snapshot rebuilt", "total_keys=", #keys, "keys=", serpent and serpent.line and serpent.line(keys) or tostring(keys))
-        end
-    end
-
-    local keys = storage._tdm.keys or {}
-    local total = #keys
-    if total == 0 then
-        return
-    end
-
-    local calls_per_period = math.max(1, math.floor(TDM_PERIOD / TDM_TICK_INTERVAL))
-    local batch_size = math.max(1, math.ceil(total / calls_per_period))
-
-    -- start processing batch
-    -- compute batch info for logging
-    local batch_total = calls_per_period
-    local start_idx = storage._tdm.next_index or 1
-    local batch_number = math.floor((start_idx - 1) / batch_size) + 1
-    if batch_number < 1 then batch_number = 1 end
-    -- TDM batch processing (logging removed to avoid runtime stalls)
-
-    local processed = 0
-    local idx = storage._tdm.next_index or 1
-    for i = 1, batch_size do
-        local key = keys[idx]
-        idx = idx + 1
-        if key ~= nil then
-            -- Resolve entity by stored surface/position if present, otherwise try unit_number lookup
-            local settings = storage.agricultural_roboports[key]
-            if type(key) == "number" and settings then
-                local entity = nil
-                -- ALWAYS try to resolve by unit_number first (most reliable for quality entities)
-                if game.get_entity_by_unit_number then
-                    entity = game.get_entity_by_unit_number(key)
-                    if write_file_log and entity then
-                        write_file_log("[TDM] Found entity by unit_number", "key=", key, "name=", entity.name, "quality=", entity.quality and entity.quality.name or "normal")
-                    elseif write_file_log then
-                        write_file_log("[TDM] Unit_number lookup failed", "key=", key, "has_position=", tostring(settings.position ~= nil))
-                    end
-                end
-                
-                -- Validate that it's actually an agricultural roboport and update position if needed
-                if entity and entity.valid and entity.name == "agricultural-roboport" then
-                    -- Update stored position if it's missing or changed
-                    if not settings.surface or not settings.position then
-                        settings.surface = entity.surface.name
-                        settings.position = { x = entity.position.x, y = entity.position.y }
-                        if write_file_log then
-                            write_file_log("[TDM] Updated missing position", "key=", key)
-                        end
-                    end
-                    -- Process the roboport
-                    process_agricultural_roboport(entity, event.tick)
-                    processed = processed + 1
-                else
-                    -- Entity not found by unit_number, try position-based lookup as fallback
-                    -- NOTE: We use find_entities_filtered instead of find_entity to match ALL qualities
-                    if settings.surface and settings.position then
-                        local surface = game.surfaces and game.surfaces[settings.surface]
-                        if surface then
-                            -- Use find_entities_filtered with radius to find entities at this position (any quality)
-                            local entities = surface.find_entities_filtered{
-                                name = "agricultural-roboport",
-                                position = settings.position,
-                                radius = 0.5  -- Small radius to catch the exact position
-                            }
-                            
-                            -- Look for entity with matching unit_number
-                            local found = false
-                            for _, e in ipairs(entities) do
-                                if e.unit_number == key then
-                                    entity = e
-                                    found = true
-                                    if write_file_log then
-                                        write_file_log("[TDM] Found by position (quality-aware)", "key=", key, "quality=", e.quality and e.quality.name or "normal")
-                                    end
-                                    process_agricultural_roboport(entity, event.tick)
-                                    processed = processed + 1
-                                    break
-                                end
-                            end
-                            
-                            if not found then
-                                -- Couldn't locate entity; remove stale entry
-                                if write_file_log then
-                                    write_file_log("[TDM] REMOVING: not found by position", "key=", key, "pos=", serpent and serpent.line and serpent.line(settings.position) or "?", "entities_at_pos=", #entities)
-                                end
-                                storage.agricultural_roboports[key] = nil
-                                storage._tdm.version = (storage._tdm.version or 0) + 1
-                            end
-                        else
-                            -- Surface doesn't exist, remove stale entry
-                            if write_file_log then
-                                write_file_log("[TDM] REMOVING: surface not found", "key=", key, "surface=", settings.surface or "nil")
-                            end
-                            storage.agricultural_roboports[key] = nil
-                            storage._tdm.version = (storage._tdm.version or 0) + 1
-                        end
-                    else
-                        -- No position info and entity not found, remove stale entry
-                        if write_file_log then
-                            write_file_log("[TDM] REMOVING: no position and unit_number failed", "key=", key)
-                        end
-                        storage.agricultural_roboports[key] = nil
-                        storage._tdm.version = (storage._tdm.version or 0) + 1
-                    end
-                end
-            end
-        end
-        if idx > total then idx = 1 end
-    end
-    storage._tdm.next_index = idx
-    -- batch complete
-end
-
--- Helper to (re)register the nth-tick handler when the desired tick interval changes.
-local function register_tdm_handler(interval)
-    storage._tdm = storage._tdm or {}
-    -- Unregister previous interval handler (if any)
-    if storage._tdm.registered_interval and storage._tdm.registered_interval ~= interval then
-        -- calling script.on_nth_tick with only the tick number removes that registration
-        -- Unregister previous nth-tick handler by passing nil as the handler
-        script.on_nth_tick(storage._tdm.registered_interval, nil)
-    end
-    -- Register the handler for the new interval
-    script.on_nth_tick(interval, tdm_tick_handler)
-    storage._tdm.registered_interval = interval
-    -- handler registered for interval
-end
-
+-- Use util for utility functions
+local clamp = util.clamp
+local table_size = util.table_size
 
 -- Metatable for roboport settings storage
 -- NOTE: We do NOT use __index here because we need nil checks to work properly.
@@ -358,9 +150,10 @@ script.on_init(function()
     storage._tdm = { version = 0, snapshot_version = 0, keys = {}, next_index = 1, registered_interval = nil }
     -- Ensure quality plants storage exists for new games
     storage.quality_plants = storage.quality_plants or {}
+    -- Make process function globally accessible
+    _G.process_agricultural_roboport = process_agricultural_roboport
     -- Re-read TDM settings at runtime and register the handler now that `game` is available
-    TDM_PERIOD, TDM_TICK_INTERVAL = read_tdm_settings()
-    register_tdm_handler(TDM_TICK_INTERVAL)
+    tdm.reload_settings()
     write_file_log("=== on_init() COMPLETE ===")
 end)
 
@@ -376,10 +169,11 @@ script.on_load(function()
     else
         write_file_log("    WARNING: storage.agricultural_roboports is nil!")
     end
+    -- Make process function globally accessible
+    _G.process_agricultural_roboport = process_agricultural_roboport
     -- Re-read TDM settings and (re)register the nth-tick handler on load
     -- TDM storage already exists from save, don't modify it (on_load must not write to storage)
-    TDM_PERIOD, TDM_TICK_INTERVAL = read_tdm_settings()
-    register_tdm_handler(TDM_TICK_INTERVAL)
+    tdm.reload_settings()
     
     -- Schedule recreation of quality sprites and virtual_seed_info rebuild on the next tick
     -- Always rebuild virtual_seed_info to pick up any prototype changes since the save was created
@@ -894,7 +688,7 @@ local function on_built_event_handler(event)
             settings.position = {x = entity.position.x, y = entity.position.y}
             storage.agricultural_roboports[ghost_key] = settings
 			write_file_log("[Event] Ghost built with tags", "ghost_key=", ghost_key)
-            tdm_mark_dirty()
+            tdm.mark_dirty()
         else
             -- Always create a default settings table for manually placed ghosts
             local settings = create_default_roboport_settings()
@@ -902,7 +696,7 @@ local function on_built_event_handler(event)
             settings.position = {x = entity.position.x, y = entity.position.y}
             storage.agricultural_roboports[ghost_key] = settings
 			write_file_log("[Event] Ghost built without tags", "ghost_key=", ghost_key)
-            tdm_mark_dirty()
+            tdm.mark_dirty()
         end
         return
     end
@@ -958,7 +752,7 @@ local function on_built_event_handler(event)
             local verify = storage.agricultural_roboports[entity.unit_number]
             write_file_log("[Event] AFTER storage assignment", "entries=", count_after, "verified=", tostring(verify ~= nil))
 			write_file_log("[Event] Roboport built with tags", "unit=", entity.unit_number)
-            tdm_mark_dirty()
+            tdm.mark_dirty()
         else
             local ghost_key = string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
             local ghost_settings = storage.agricultural_roboports[ghost_key]
@@ -975,7 +769,7 @@ local function on_built_event_handler(event)
                 local verify = storage.agricultural_roboports[entity.unit_number]
                 write_file_log("[Event] AFTER storage assignment", "entries=", count_after, "verified=", tostring(verify ~= nil))
 				write_file_log("[Event] Roboport built over ghost, copied settings", "unit=", entity.unit_number, "ghost_key=", ghost_key)
-                tdm_mark_dirty()
+                tdm.mark_dirty()
             else
                 local settings = create_default_roboport_settings()
                 settings.surface = entity.surface.name
@@ -988,7 +782,7 @@ local function on_built_event_handler(event)
                 local verify = storage.agricultural_roboports[entity.unit_number]
                 write_file_log("[Event] AFTER storage assignment", "entries=", count_after, "verified=", tostring(verify ~= nil))
 				write_file_log("[Event] Roboport built without tags and ghost", "unit=", entity.unit_number)
-                tdm_mark_dirty()
+                tdm.mark_dirty()
             end
         end
         return
@@ -1006,7 +800,7 @@ local function on_remove_agricultural_roboport(event)
     if entity and entity.name == "agricultural-roboport" then
         storage.agricultural_roboports[entity.unit_number] = nil
         write_file_log("[Event] Roboport removed", "unit=", entity.unit_number)
-        tdm_mark_dirty()
+        tdm.mark_dirty()
     end
 end
 
@@ -1136,20 +930,6 @@ end
 
 -- Note: handler registration occurs during `on_init` to ensure `game` is available for logging
 
--- Re-register handler when relevant runtime-global settings change
-script.on_event(defines.events.on_runtime_mod_setting_changed, function(event)
-    if not event or not event.setting then return end
-    if event.setting == "agricultural-roboport-tdm-period" or event.setting == "agricultural-roboport-tdm-tick-interval" then
-        TDM_PERIOD, TDM_TICK_INTERVAL = read_tdm_settings()
-        register_tdm_handler(TDM_TICK_INTERVAL)
-    end
-end)
-
-
-script.on_event(defines.events.script_raised_built, on_script_raised_built_entity_dispatch)
-
-script.on_event(defines.events.on_built_entity, on_built_event_handler, {{filter = "name", mode="or", name = "entity-ghost"}, {filter = "name", mode="or", name = "agricultural-roboport"}, {filter="type", mode="or", type="plant"}})
-
 -- Combined dispatch: handle roboport removal and plant harvests without overwriting other handlers
 local function on_entity_removed_dispatch(event)
     -- Keep existing roboport removal behavior
@@ -1169,29 +949,44 @@ local function on_entity_removed_dispatch(event)
     end
 end
 
-script.on_event({defines.events.on_entity_died, defines.events.on_player_mined_entity, defines.events.on_robot_mined_entity}, on_entity_removed_dispatch)
+-- ========================================================================
+-- EVENT SUBSCRIPTIONS (Centralized)
+-- ========================================================================
 
-script.on_event(defines.events.on_robot_built_entity, on_robot_built_entity_dispatch)
-script.on_event(defines.events.on_entity_settings_pasted, on_entity_settings_pasted)
-
-script.on_event(defines.events.on_player_setup_blueprint, on_player_setup_blueprint)
-
--- Register tower/tile planting and tower-mined events so our quality registry stays in sync
-script.on_event(defines.events.on_tower_planted_seed, function(event)
-    if event and event.plant and event.seed then
-		if write_file_log then
-			write_file_log("[QUALITY] on_tower_planted_seed: plant=", event.plant.name, "seed quality=", event.seed.quality and event.seed.quality.name or "nil", "quality level=", event.seed.quality and event.seed.quality.level or "nil")
-		end
-        pcall(function() register_plant(event.plant, event.seed.quality) end)
-		
-    end
-end)
-
-script.on_event(defines.events.on_tower_mined_plant, function(event)
-    if event and event.plant then
-        pcall(function() harvest_plant(event.plant, event.buffer) end)
-    end
-end)
+event_subscriptions.register_all({
+    tdm = {
+        on_runtime_mod_setting_changed = function(event)
+            if not event or not event.setting then return end
+            if event.setting == "agricultural-roboport-tdm-period" or 
+               event.setting == "agricultural-roboport-tdm-tick-interval" then
+                tdm.reload_settings()
+            end
+        end
+    },
+    roboport = {
+        on_script_raised_built = on_script_raised_built_entity_dispatch,
+        on_built_entity = on_built_event_handler,
+        on_robot_built_entity = on_robot_built_entity_dispatch,
+        on_entity_removed = on_entity_removed_dispatch,
+        on_entity_settings_pasted = on_entity_settings_pasted,
+        on_player_setup_blueprint = on_player_setup_blueprint,
+        on_tower_planted_seed = function(event)
+            if event and event.plant and event.seed then
+                if write_file_log then
+                    write_file_log("[QUALITY] on_tower_planted_seed: plant=", event.plant.name, "seed quality=", event.seed.quality and event.seed.quality.name or "nil", "quality level=", event.seed.quality and event.seed.quality.level or "nil")
+                end
+                pcall(function() register_plant(event.plant, event.seed.quality) end)
+            end
+        end,
+        on_tower_mined_plant = function(event)
+            if event and event.plant then
+                pcall(function() harvest_plant(event.plant, event.buffer) end)
+            end
+        end
+    },
+    vegetation_planner = vegetation_planner,
+    ui = UI
+})
 
 script.on_configuration_changed(function()
     -- Always rebuild virtual_seed_info on configuration change to pick up new seeds or mod changes
