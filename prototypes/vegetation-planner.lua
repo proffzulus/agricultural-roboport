@@ -1,7 +1,33 @@
 -- Vegetation Planner - selection tool for manual seeding
 
 -- Technology: Soil Analysis (very early, 10 red science)
-data:extend({
+if mods["lignumis"] then 
+	log("Lignumis detected: preparing soil analysis tech with wood-science-pack")
+	data.extend({
+		{
+			type = "technology",
+			name = "agricultural-soil-analysis",
+			icon = "__agricultural-roboport__/graphics/soil-analysis.png",
+			icon_size = 256,
+			effects = {
+				{
+					type = "nothing",
+					effect_description = {"shortcut-name.vegetation-planner"},
+					icon = "__agricultural-roboport__/graphics/vegetation_planner.png",
+					icon_size = 64
+				}
+			},
+			unit = {
+				count = 10,
+				ingredients = {{"wood-science-pack", 1}},
+				time = 5
+			}, 
+			order = "c-a-a-a" -- Very early placement
+		}
+	});
+	
+else
+data.extend({
     {
         type = "technology",
         name = "agricultural-soil-analysis",
@@ -22,7 +48,8 @@ data:extend({
         },
         order = "c-a-a-a" -- Very early placement
     }
-})
+});
+end
 
 -- Item: Selection tool (spawnable only, not craftable)
 data:extend({
