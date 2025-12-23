@@ -71,7 +71,7 @@ Below are the main settings exposed by the mod and their intended effect on game
 ### Startup Settings
 
 - `agricultural-roboport-enable-quality`: Toggle quality tracking and display for plants. When enabled, plants retain quality from seeds and can mutate during harvest. When disabled, all quality logic is bypassed. **Requires game restart.**
-- `agricultural-roboport-dense-seeding`: Attempt to seed on every tile (instead of every 3rd tile in standard mode). Enables much denser plant packing but **will significantly impact performance**. Use whitelist filters to limit which plants are seeded to reduce load. **Requires game restart.**
+- `agricultural-roboport-dense-seeding`: Attempt to seed on every tile (instead of every 3rd tile in standard mode). Enables much denser plant packing and requires more construction bots. **Requires game restart.**
 
 ### Runtime Settings
 
@@ -96,7 +96,7 @@ Below are the main settings exposed by the mod and their intended effect on game
 
 ### Tuning Advice
 
-- **Dense seeding performance**: Seeding on every tile dramatically increases collision checks and ghost placements. This **will impact performance** on large maps or with many roboports. **Recommended**: Use whitelist filters to limit seeding to specific plant types when using dense mode.
+- **Dense seeding**: Seeding on every tile increases collision checks and ghost placements. For extremely large operations, you can use whitelist filters to limit which plants are seeded.
 - For low-end machines or dense maps, reduce `*_checks-per-call` and `max-*` values to spread work across ticks.
 - For faster cleanup and aggressive automation, increase `*_checks-per-call` and `max-*` but monitor CPU usage and set `agricultural-roboport-debug` to `false`.
 - Use quality mutation settings to balance farming efficiency with desired quality progression rates.

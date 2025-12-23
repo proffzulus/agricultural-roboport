@@ -206,8 +206,8 @@ function vegetation_planner.on_player_selected_area(event)
     end
     candidate_seeds = surface_compatible_seeds
     
+    -- Silently do nothing if no compatible seeds (expected behavior for empty whitelist)
     if #candidate_seeds == 0 then
-        player.print({"vegetation-planner.error-no-compatible-seeds"})
         return
     end
     

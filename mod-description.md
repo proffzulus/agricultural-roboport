@@ -40,7 +40,7 @@ Settings (what to tweak)
 ------------------------
 **Startup Settings:**
 - **Enable quality plants** — Toggle quality tracking and display (requires game restart).
-- **Seed in dense grid** — Attempts to plant on every tile instead of every 3rd tile. Enables much tighter plant packing but **will significantly impact performance**. Use whitelist filters to limit which plants are seeded. Requires game restart.
+- **Seed in dense grid** — Attempts to plant on every tile instead of every 3rd tile. Enables much tighter plant packing and requires more construction bots. Requires game restart.
 
 **Runtime Settings:**
 - Max seeds per tick — how many seed placements are attempted per tick (lower reduces CPU).

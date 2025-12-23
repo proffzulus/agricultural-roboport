@@ -770,12 +770,20 @@ end
 function UI.on_tick(event)
     if not _G._agroport_deferred_elem then return end
     for player_index, btns in pairs(_G._agroport_deferred_elem) do
+        -- Verify player exists (may be nil in editor mode)
+        local player = game.get_player(player_index)
+        if not player then
+            _G._agroport_deferred_elem[player_index] = nil
+            goto continue
+        end
+        
         for _, entry in pairs(btns) do
             if entry.button and entry.button.valid then
                 entry.button.elem_value = entry.value
             end
         end
-        _G._agroport_deferred_elem[player.index] = nil
+        _G._agroport_deferred_elem[player_index] = nil
+        ::continue::
     end
 end
 

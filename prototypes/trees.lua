@@ -30,6 +30,7 @@ for category_name, category_prototypes in pairs(data.raw) do
                 local base = util.table.deepcopy(data.raw["container"]["wooden-chest"])
                 base.name = virtual_name
                 base.localised_name = {"agricultural-roboport.request-for-planting"}
+                base.hidden_in_factoriopedia = true
                 
                 -- Set icon from seed item
                 base.icon = item_proto.icon or (item_proto.icons and item_proto.icons[1] and item_proto.icons[1].icon)

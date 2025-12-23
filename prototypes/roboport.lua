@@ -4,6 +4,7 @@ local green_tint = {r = 0.7, g = 1, b = 0.6, a = 1}
 local agricultural_roboport_entity =  table.deepcopy(data.raw["roboport"]["roboport"])
 agricultural_roboport_entity.name = "agricultural-roboport"
 agricultural_roboport_entity.localised_name = {"agricultural-roboport.name"}
+agricultural_roboport_entity.localised_description = {"agricultural-roboport.description"}
 agricultural_roboport_entity.minable = {mining_time = 0.1, result = "agricultural-roboport"}
 agricultural_roboport_entity.icons = {
 	{
@@ -39,6 +40,7 @@ local agricultural_roboport_technology = {
 	type = "technology",
 	name = "agricultural-roboport",
 	localised_name = {"agricultural-roboport.technology"},
+	localised_description = {"agricultural-roboport.technology-description"},
 	icon = data.raw.technology["construction-robotics"].icon,
 	icon_size = data.raw.technology["construction-robotics"].icon_size,
 	icon_mipmaps = data.raw.technology["construction-robotics"].icon_mipmaps,
