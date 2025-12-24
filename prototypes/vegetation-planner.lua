@@ -9,6 +9,7 @@ if mods["lignumis"] then
 			name = "agricultural-soil-analysis",
 			icon = "__agricultural-roboport__/graphics/soil-analysis.png",
 			icon_size = 256,
+            prerequisites = { "wood-science-pack" },
 			effects = {
 				{
 					type = "nothing",
