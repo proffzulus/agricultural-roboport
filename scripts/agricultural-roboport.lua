@@ -390,6 +390,11 @@ function seed(roboport, seed_logistic_only)
     local idx = rsettings.precomputed.next_seed_index or 1
     local remaining_checks = checks_per_call
     
+    -- Early exit if no candidate seeds (e.g., empty whitelist filter)
+    if #candidate_seeds == 0 then
+        return
+    end
+    
     while remaining_checks > 0 and placed < max_seeds do
         -- Wrap index if needed
         if idx > total_positions then idx = 1 end
