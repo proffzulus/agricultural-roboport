@@ -25,7 +25,7 @@ local agricultural_roboport_recipe = {
 	energy_required = 10,
 	ingredients = {
 		{type = "item", name = "roboport", amount = 1},
-		{type = "item", name = "agricultural-tower", amount = 1},
+		{type = "item", name = "processing-unit", amount = 50},
 	},
 	results = {
 		{type = "item", name = "agricultural-roboport", amount = 1},
@@ -44,18 +44,32 @@ local agricultural_roboport_technology = {
 			recipe = "agricultural-roboport"
 		}
 	},
-	prerequisites ={"construction-robotics", "agriculture", "agricultural-soil-analysis"},
+	prerequisites ={"construction-robotics", "agricultural-soil-analysis"},
 	unit = {
 		count = 200,
 		ingredients = {
 			{"automation-science-pack", 1},
 			{"logistic-science-pack", 1},
 			{"chemical-science-pack", 1},
-			{"agricultural-science-pack", 1}
 		},
 		time = 30
 	},
 	order = "c-k-a"
 }
-
+if mods["space-age"] then
+	log("Space Age DLC detected: Adjusting Agricultural Roboport recipe and technology")
+	agricultural_roboport_recipe.ingredients = {
+		{type = "item", name = "roboport", amount = 1},
+		{type = "item", name = "agricultural-tower", amount = 1},
+	}
+	agricultural_roboport_technology.prerequisites ={"construction-robotics", "agriculture", "agricultural-soil-analysis"}
+	agricultural_roboport_technology.unit.ingredients = {
+		{"automation-science-pack", 1},
+		{"logistic-science-pack", 1},
+		{"chemical-science-pack", 1},
+		{"agricultural-science-pack", 1}
+	}
+else
+	log("Space Age DLC not detected: Using default Agricultural Roboport recipe and technology")
+end
 data:extend{agricultural_roboport_entity, agricultural_roboport_item, agricultural_roboport_recipe, agricultural_roboport_technology}

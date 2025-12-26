@@ -1,5 +1,13 @@
 
 ---------------------------------------------------------------------------------------------------
+Version: 1.3.5
+Date: 2025-12-26
+  Improvements:
+    - Added backward compatibility with base game
+    - Space Age DLC is now optional
+    - Quality is now optional
+
+---------------------------------------------------------------------------------------------------
 Version: 1.3.4
 Date: 2025-12-25
   Improvements:

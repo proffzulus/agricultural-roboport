@@ -1,11 +1,4 @@
-data:extend({
-  {
-    type = "bool-setting",
-    name = "agricultural-roboport-enable-quality",
-    setting_type = "startup",
-    default_value = true,
-    order = "a-0"
-  },
+local agricultural_roboport_settings = {
   {
     type = "bool-setting",
     name = "agricultural-roboport-dense-seeding",
@@ -103,6 +96,27 @@ data:extend({
     minimum_value = 0,
     maximum_value = 100,
     order = "h-1"
-  }
-})
-
+  }}
+  if mods["quality"] then 
+	log("Quality mod detected: Enabling quality settings for Agricultural Roboport");
+	table.insert(agricultural_roboport_settings,  
+	{
+    type = "bool-setting",
+    name = "agricultural-roboport-enable-quality",
+    setting_type = "startup",
+    default_value = true,
+    order = "a-0"
+  })
+else 
+	log("Quality mod not detected: Skipping quality settings for Agricultural Roboport");
+	table.insert(agricultural_roboport_settings,  
+	{
+	type = "bool-setting",
+	name = "agricultural-roboport-enable-quality",
+	setting_type = "startup",
+	default_value = false,
+	hidden = true,
+	order = "a-0"
+  })
+end
+data:extend(agricultural_roboport_settings)

@@ -134,5 +134,8 @@ for category_name, category_prototypes in pairs(data.raw) do
 end
 
 log("[Agricultural Roboport] Prototype scan complete: " .. seed_count .. " virtual seeds created, " .. skipped_count .. " items skipped")
-
-data:extend(virtual_seeds)
+if seed_count == 0 then
+	log("[Agricultural Roboport] WARNING: No virtual seeds were created! Check if there are any items with plant_result in the prototypes.")
+else
+	data:extend(virtual_seeds)
+end
