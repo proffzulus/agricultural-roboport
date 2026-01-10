@@ -197,16 +197,41 @@ script.on_load(function()
         
         if write_file_log then write_file_log("[QUALITY] on_load: Recreating sprites for", table_size(storage.quality_plants), "quality plants") end
         
+        local old_keys_to_migrate = {}
+        
         for key, data in pairs(storage.quality_plants) do
             if data and data.quality then
-                local surface_name, fx, fy = key:match("^([^:]+):(-?%d+),(-?%d+)$")
-                if not surface_name then goto continue_end end
+                -- Try to parse new hash format first (surface:x.xx,y.yy)
+                local surface_name, fx, fy = key:match("^([^:]+):([%d%.%-]+),([%d%.%-]+)$")
+                local is_old_format = false
+                
+                -- If that fails, try old format (surface:int,int where coordinates were floor(x/2))
+                if not surface_name then
+                    surface_name, fx, fy = key:match("^([^:]+):(-?%d+),(-?%d+)$")
+                    if surface_name then
+                        is_old_format = true
+                        if write_file_log then write_file_log("[QUALITY] on_load: Found old hash format key=", key) end
+                    else
+                        goto continue_end
+                    end
+                end
+                
                 local surface = game and game.surfaces and game.surfaces[surface_name]
                 if not surface then goto continue_end end
                 
-                local x_min = tonumber(fx) * 2
-                local y_min = tonumber(fy) * 2
-                local area = {{x_min - 0.5, y_min - 0.5}, {x_min + 2.5, y_min + 2.5}}
+                local x_search, y_search, area
+                if is_old_format then
+                    -- Old format: hash was floor(x/2), so actual coordinates span 2x2 tile area
+                    local x_min = tonumber(fx) * 2
+                    local y_min = tonumber(fy) * 2
+                    area = {{x_min - 0.5, y_min - 0.5}, {x_min + 2.5, y_min + 2.5}}
+                else
+                    -- New format: exact coordinates
+                    x_search = tonumber(fx)
+                    y_search = tonumber(fy)
+                    area = {{x_search - 0.5, y_search - 0.5}, {x_search + 0.5, y_search + 0.5}}
+                end
+                
                 local ents = surface.find_entities_filtered{ area = area, type = "plant" }
                 local plant = ents and ents[1]
                 
@@ -236,10 +261,50 @@ script.on_load(function()
                             quality_plant_sprites[key] = sprite_id
                             if write_file_log then write_file_log("[QUALITY] on_load: Recreated sprite for key=", key, "sprite=", sprite_id) end
                         end
+                        
+                        -- If this was old format, schedule migration to new format
+                        if is_old_format then
+                            table.insert(old_keys_to_migrate, {
+                                old_key = key,
+                                plant = plant,
+                                quality = data.quality
+                            })
+                        end
                     end
                 end
                 ::continue_end::
             end
+        end
+        
+        -- Migrate old format keys to new format (backward compatibility)
+        if #old_keys_to_migrate > 0 then
+            if write_file_log then write_file_log("[QUALITY] on_load: Migrating", #old_keys_to_migrate, "old format keys to new format") end
+            
+            for _, entry in ipairs(old_keys_to_migrate) do
+                -- Remove old key
+                storage.quality_plants[entry.old_key] = nil
+                
+                -- Remove old sprite from runtime table
+                local old_sprite_id = quality_plant_sprites[entry.old_key]
+                if old_sprite_id then
+                    quality_plant_sprites[entry.old_key] = nil
+                end
+                
+                -- Re-register with new hash format (exact coordinates)
+                local new_key = hash_string(entry.plant.position.x, entry.plant.position.y, entry.plant.surface.name)
+                storage.quality_plants[new_key] = { quality = entry.quality }
+                
+                -- Sprite already created above, just update runtime table key
+                if old_sprite_id then
+                    quality_plant_sprites[new_key] = old_sprite_id
+                end
+                
+                if write_file_log then 
+                    write_file_log("[QUALITY] Migrated:", entry.old_key, "->", new_key) 
+                end
+            end
+            
+            if write_file_log then write_file_log("[QUALITY] on_load: Migration complete") end
         end
         
         if write_file_log then write_file_log("[QUALITY] on_load: Sprite recreation complete, total sprites=", table_size(quality_plant_sprites)) end
@@ -253,7 +318,9 @@ end)
 
 -- Quality-plant runtime registry (inspired by quality-trees mod)
 local function hash_string(x, y, surface_name)
-    return surface_name .. ":" .. math.floor(x / 2) .. "," .. math.floor(y / 2)
+    -- Use exact coordinates to avoid collisions in dense mode (9+ plants per tile)
+    -- Format: "surface_name:x,y" where x and y preserve decimal precision
+    return string.format("%s:%.2f,%.2f", surface_name, x, y)
 end
 
 local function register_plant(plant, quality)
