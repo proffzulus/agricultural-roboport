@@ -290,6 +290,84 @@ function UI.on_gui_opened(event)
         local settings = storage.agricultural_roboports[unit_key]
         local mode = settings.mode or 0
         local seed_logistic_only = settings.seed_logistic_only or false
+        
+        -- Check if circuit network controls mode or filters (read from settings)
+        local circuit_controls_mode = settings.circuit_mode_enabled or false
+        local circuit_controls_filters = settings.circuit_filter_enabled or false
+        local circuit_mode_value = mode
+        local circuit_filters = {}
+        
+        if is_roboport and entity.get_control_behavior then
+            local control_behavior = entity.get_control_behavior()
+            if control_behavior then
+                -- Check if circuit controls operating mode (from settings)
+                if circuit_controls_mode then
+                    local mode_signal = settings.circuit_mode_signal or {type = "virtual", name = "signal-M"}
+                    if mode_signal and mode_signal.name then
+                        local red_network = entity.get_circuit_network(defines.wire_connector_id.circuit_red)
+                        local green_network = entity.get_circuit_network(defines.wire_connector_id.circuit_green)
+                        
+                        local signal_value = 0
+                        if red_network then
+                            local signal = red_network.get_signal(mode_signal)
+                            if signal then signal_value = signal_value + signal end
+                        end
+                        if green_network then
+                            local signal = green_network.get_signal(mode_signal)
+                            if signal then signal_value = signal_value + signal end
+                        end
+                        
+                        -- Mode is circuit-controlled
+                        if signal_value < 0 then
+                            circuit_mode_value = -1
+                        elseif signal_value > 0 then
+                            circuit_mode_value = 1
+                        else
+                            circuit_mode_value = 0
+                        end
+                    end
+                end
+                
+                -- Check if circuit filter control is explicitly enabled
+                local red_network = entity.get_circuit_network(defines.wire_connector_id.circuit_red)
+                local green_network = entity.get_circuit_network(defines.wire_connector_id.circuit_green)
+                
+                if circuit_controls_filters and (red_network or green_network) then
+                    -- Read circuit filters
+                    circuit_controls_filters = true
+                    
+                    -- Read circuit filters from both networks
+                    local virtual_seed_info = storage.virtual_seed_info
+                    if not virtual_seed_info then
+                        virtual_seed_info = Build_virtual_seed_info and Build_virtual_seed_info() or {}
+                    end
+                    
+                    local function read_filter_signals(network)
+                        if not network then return end
+                        local signals = network.signals
+                        if not signals then return end
+                        
+                        for _, signal_data in ipairs(signals) do
+                            if signal_data.signal and signal_data.signal.name and signal_data.count > 0 then
+                                local signal_name = signal_data.signal.name
+                                if virtual_seed_info[signal_name] then
+                                    local quality_name = "normal"
+                                    -- Quality field is a string, not an object
+                                    if signal_data.signal.quality then
+                                        quality_name = signal_data.signal.quality
+                                    end
+                                    table.insert(circuit_filters, {name = signal_name, quality = quality_name})
+                                end
+                            end
+                        end
+                    end
+                    
+                    read_filter_signals(red_network)
+                    read_filter_signals(green_network)
+                end
+            end
+        end
+        
         local frame = player.gui.relative.add{
             type = "frame",
             name = "agricultural_roboport_mode",
@@ -301,13 +379,15 @@ function UI.on_gui_opened(event)
             },
             direction = "vertical"
         }
-        frame.add{
+        
+        local mode_switch = frame.add{
             type = "switch",
             name = "agricultural_roboport_mode_switch_" .. tostring(unit_key),
-            switch_state = mode_to_switch_state(mode),
+            switch_state = mode_to_switch_state(circuit_controls_mode and circuit_mode_value or mode),
             left_label_caption = {"agricultural-roboport.mode-harvest"},
             right_label_caption = {"agricultural-roboport.mode-seed"},
-            allow_none_state = true
+            allow_none_state = true,
+            enabled = not circuit_controls_mode
         }
         frame.add{
             type = "checkbox",
@@ -315,6 +395,57 @@ function UI.on_gui_opened(event)
             state = seed_logistic_only,
             caption = {"agricultural-roboport.seed-logistic-only"}
         }
+        
+        -- Check if wires are connected
+        local has_wires = false
+        if is_roboport and entity.get_control_behavior then
+            local red_network = entity.get_circuit_network(defines.wire_connector_id.circuit_red)
+            local green_network = entity.get_circuit_network(defines.wire_connector_id.circuit_green)
+            has_wires = (red_network ~= nil or green_network ~= nil)
+        end
+        
+        -- Circuit controls section (only show if wires are connected)
+        local circuit_section = nil
+        if has_wires then
+            circuit_section = frame.add{
+                type = "flow",
+                name = "agricultural_roboport_circuit_section_" .. tostring(unit_key),
+                direction = "vertical"
+            }
+        end
+        
+        -- Set mode of operation from circuit checkbox + signal picker (only if wires connected)
+        if has_wires and circuit_section then
+            local mode_control_flow = circuit_section.add{
+                type = "flow",
+                direction = "horizontal",
+                style = "horizontal_flow"
+            }
+            mode_control_flow.add{
+                type = "checkbox",
+                name = "agricultural_roboport_circuit_mode_enable_" .. tostring(unit_key),
+                state = circuit_controls_mode,
+                caption = {"agricultural-roboport.circuit-set-operating-mode"},
+                tooltip = {"agricultural-roboport.circuit-mode-tooltip"}
+            }
+            mode_control_flow.add{
+                type = "choose-elem-button",
+                name = "agricultural_roboport_circuit_mode_signal_" .. tostring(unit_key),
+                elem_type = "signal",
+                signal = settings.circuit_mode_signal or {type = "virtual", name = "signal-M"},
+                enabled = circuit_controls_mode,
+                style = "slot_button"
+            }
+            
+            -- Set filters from circuit checkbox
+            local filter_control_checkbox = circuit_section.add{
+                type = "checkbox",
+                name = "agricultural_roboport_circuit_filter_enable_" .. tostring(unit_key),
+                state = settings.circuit_filter_enabled or false,
+                caption = {"agricultural-roboport.circuit-set-filters"},
+                tooltip = {"agricultural-roboport.circuit-filter-tooltip"}
+            }
+        end
         -- Filter group
         local filter_flow = frame.add{
             type = "flow",
@@ -336,11 +467,17 @@ function UI.on_gui_opened(event)
             direction = "horizontal",
             style = "horizontal_flow"
         }
+        
+        -- When circuit controls filters, set use_filter to true and use circuit filters
+        local effective_use_filter = circuit_controls_filters or (settings.use_filter or false)
+        local effective_filters = circuit_controls_filters and circuit_filters or (settings.filters or {})
+        
         local use_filter_checkbox = use_filter_row.add{
             type = "checkbox",
             name = "agricultural_roboport_use_filter_checkbox_" .. tostring(unit_key),
-            state = settings.use_filter or false,
-            caption = {"gui-inserter.use-filters"}
+            state = effective_use_filter,
+            caption = {"gui-inserter.use-filters"},
+            enabled = not circuit_controls_filters
         }
         -- Container for the rest of the filter controls
         local filter_controls_row = filter_outer_flow.add{
@@ -381,7 +518,8 @@ function UI.on_gui_opened(event)
             column_count = 5, -- 5 filter slots
             style = "filter_slot_table"
         }
-        local filters = settings.filters or {}
+        -- Use circuit filters if circuit controls filters, otherwise use manual filters
+        local filters = effective_filters
         -- Only support item selection for now
         -- Use rawget(_G, 'prototypes') for prototype existence check (Factorio 2.0+)
         -- Prepare for deferred elem_value setting
@@ -464,7 +602,7 @@ function UI.on_gui_opened(event)
                 elem_filters = {
                     {filter = "name", name = seed_names}
                 },
-                enabled = use_filter_checkbox.state,
+                enabled = (effective_use_filter and not circuit_controls_filters),
                 style = "slot_button"
             }
             
@@ -484,7 +622,7 @@ function UI.on_gui_opened(event)
         switch_row.enabled = use_filter_checkbox.state
         filter_controls_row.enabled = use_filter_checkbox.state
         -- Helper: update filter buttons and compress filters (vanilla inserter logic)
-        filters = update_filter_buttons_and_compress_filters(unit_key, filter_table, use_filter_checkbox.state, filters)
+        filters = update_filter_buttons_and_compress_filters(unit_key, filter_table, use_filter_checkbox.state, filters, circuit_controls_filters)
         filter_table.enabled = true -- Table container itself should always be enabled for layout
         write_file_log("[UI] Open GUI for key=", tostring(unit_key), "mode=", tostring(mode))
         -- Log parent chain for debugging
@@ -510,6 +648,15 @@ function UI.on_gui_opened(event)
                 child.enabled = filter_controls_enabled
             end
         end
+        
+        -- Track that this player has this roboport GUI open for real-time updates
+        storage.open_roboport_guis = storage.open_roboport_guis or {}
+        storage.open_roboport_guis[event.player_index] = {
+            unit_key = unit_key,
+            entity = entity,
+            is_roboport = is_roboport
+        }
+        write_file_log("[GUI OPEN] Registered GUI tracking for player", event.player_index, "unit_key=", tostring(unit_key))
     end
 end
 
@@ -518,6 +665,180 @@ function UI.on_gui_closed(event)
     local player = game.get_player(event.player_index)
     if player.gui.relative.agricultural_roboport_mode then
         player.gui.relative.agricultural_roboport_mode.destroy()
+    end
+    
+    -- Stop tracking this GUI
+    if storage.open_roboport_guis then
+        storage.open_roboport_guis[event.player_index] = nil
+    end
+end
+
+-- Periodic update of open GUIs to show real-time circuit filter changes
+function UI.update_open_guis()
+    if not storage.open_roboport_guis then 
+        write_file_log("[GUI UPDATE] No open roboport GUIs tracked")
+        return 
+    end
+    
+    local gui_count = 0
+    for _ in pairs(storage.open_roboport_guis) do
+        gui_count = gui_count + 1
+    end
+    write_file_log("[GUI UPDATE] Checking", gui_count, "open GUIs")
+    
+    for player_index, gui_info in pairs(storage.open_roboport_guis) do
+        local player = game.get_player(player_index)
+        if not (player and player.valid and player.gui.relative.agricultural_roboport_mode) then
+            -- GUI is no longer open, stop tracking
+            write_file_log("[GUI UPDATE] Player", player_index, "GUI no longer open")
+            storage.open_roboport_guis[player_index] = nil
+            goto continue
+        end
+        
+        local entity = gui_info.entity
+        local unit_key = gui_info.unit_key
+        local is_roboport = gui_info.is_roboport
+        
+        if not (entity and entity.valid) then
+            write_file_log("[GUI UPDATE] Entity for player", player_index, "no longer valid")
+            storage.open_roboport_guis[player_index] = nil
+            goto continue
+        end
+        
+        -- Get settings for this roboport
+        local settings = storage.agricultural_roboports[unit_key]
+        if not settings then 
+            write_file_log("[GUI UPDATE] No settings for unit_key", tostring(unit_key))
+            goto continue 
+        end
+        
+        local circuit_mode_enabled = settings.circuit_mode_enabled or false
+        local circuit_filter_enabled = settings.circuit_filter_enabled or false
+        write_file_log("[GUI UPDATE] Player", player_index, "circuit_mode_enabled=", circuit_mode_enabled, "circuit_filter_enabled=", circuit_filter_enabled)
+        
+        -- Skip if neither circuit control is enabled
+        if not circuit_mode_enabled and not circuit_filter_enabled then goto continue end
+        
+        -- Read circuit networks
+        if is_roboport and entity.get_control_behavior then
+            local red_network = entity.get_circuit_network(defines.wire_connector_id.circuit_red)
+            local green_network = entity.get_circuit_network(defines.wire_connector_id.circuit_green)
+            
+            write_file_log("[GUI UPDATE] Networks: red=", red_network ~= nil, "green=", green_network ~= nil)
+            
+            local frame = player.gui.relative.agricultural_roboport_mode
+            if not frame then goto continue end
+            
+            -- Update operating mode switch if circuit controls it
+            if circuit_mode_enabled then
+                local mode_signal = settings.circuit_mode_signal or {type = "virtual", name = "signal-M"}
+                if mode_signal and mode_signal.name then
+                    local signal_value = 0
+                    
+                    if red_network then
+                        local signal = red_network.get_signal(mode_signal)
+                        if signal then signal_value = signal_value + signal end
+                    end
+                    if green_network then
+                        local signal = green_network.get_signal(mode_signal)
+                        if signal then signal_value = signal_value + signal end
+                    end
+                    
+                    -- Determine mode from signal
+                    local circuit_mode = 0
+                    if signal_value < 0 then
+                        circuit_mode = -1
+                    elseif signal_value > 0 then
+                        circuit_mode = 1
+                    end
+                    
+                    -- Update mode switch display
+                    local mode_switch = frame["agricultural_roboport_mode_switch_" .. tostring(unit_key)]
+                    if mode_switch and mode_switch.valid then
+                        mode_switch.switch_state = mode_to_switch_state(circuit_mode)
+                        write_file_log("[GUI UPDATE] Updated mode switch to", circuit_mode, "from signal value", signal_value)
+                    end
+                end
+            end
+            
+            -- Update filters if circuit controls them
+            if circuit_filter_enabled then
+                -- Read filters from circuit (even if no signals present, to clear the display)
+                local circuit_filters = {}
+                
+                if red_network or green_network then
+                    local virtual_seed_info = storage.virtual_seed_info
+                    if not virtual_seed_info then
+                        virtual_seed_info = Build_virtual_seed_info and Build_virtual_seed_info() or {}
+                    end
+                    
+                    local function read_filter_signals(network)
+                        if not network then return end
+                        local signals = network.signals
+                        if not signals then return end
+                        
+                        for _, signal_data in ipairs(signals) do
+                            if signal_data.signal and signal_data.signal.name and signal_data.count > 0 then
+                                local signal_name = signal_data.signal.name
+                                if virtual_seed_info[signal_name] then
+                                    local quality_name = "normal"
+                                    -- Quality field is a string, not an object
+                                    if signal_data.signal.quality then
+                                        quality_name = signal_data.signal.quality
+                                    end
+                                    table.insert(circuit_filters, {name = signal_name, quality = quality_name})
+                                end
+                            end
+                        end
+                    end
+                    
+                    read_filter_signals(red_network)
+                    read_filter_signals(green_network)
+                end
+                
+                write_file_log("[GUI UPDATE] Circuit filters found:", #circuit_filters)
+                
+                -- Update filter button display
+                local filter_flow = frame["agricultural_roboport_filter_flow_" .. tostring(unit_key)]
+                if filter_flow then
+                    local filter_outer = filter_flow["agricultural_roboport_filter_outer_flow_" .. tostring(unit_key)]
+                    if filter_outer then
+                        local filter_controls = filter_outer["agricultural_roboport_filter_controls_row_" .. tostring(unit_key)]
+                        if filter_controls then
+                            local filter_table = filter_controls["agricultural_roboport_filter_table_" .. tostring(unit_key)]
+                            if filter_table then
+                                -- Update filter button values to show circuit filters
+                                local quality_enabled = is_quality_enabled()
+                                
+                                for i = 1, 5 do
+                                    local filter_btn = filter_table["agricultural_roboport_filter_" .. tostring(unit_key) .. "_" .. tostring(i)]
+                                    if filter_btn and filter_btn.valid then
+                                        local filter_entry = circuit_filters[i]
+                                        
+                                        if filter_entry and type(filter_entry) == "table" and filter_entry.name then
+                                            local uses_quality_selector = (filter_btn.elem_type == "item-with-quality")
+                                            if uses_quality_selector then
+                                                filter_btn.elem_value = {
+                                                    name = filter_entry.name,
+                                                    quality = filter_entry.quality or "normal"
+                                                }
+                                            else
+                                                filter_btn.elem_value = filter_entry.name
+                                            end
+                                        else
+                                            -- Clear empty slots
+                                            filter_btn.elem_value = nil
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        
+        ::continue::
     end
 end
 
@@ -754,7 +1075,8 @@ function UI.on_gui_elem_changed(event)
             local player = game.get_player(event.player_index)
             if player and player.valid then
                 local filter_table = element.parent
-                update_filter_buttons_and_compress_filters(unit_key, filter_table, settings.use_filter == true, new_filters)
+                local circuit_controls_filters = settings.circuit_filter_enabled or false
+                update_filter_buttons_and_compress_filters(unit_key, filter_table, settings.use_filter == true, new_filters, circuit_controls_filters)
                 if quality_enabled and type(element.elem_value) == "table" then
                     write_file_log("[UI] Selected filter for key=", tostring(unit_key), "index=", tostring(idx), "value=", tostring(element.elem_value and (element.elem_value.name .. "@" .. element.elem_value.quality) or "nil"))
                 else
@@ -763,27 +1085,51 @@ function UI.on_gui_elem_changed(event)
             end
         end
     end
+    
+    -- Handle circuit mode signal picker
+    if element.name and element.name:find("^agricultural_roboport_circuit_mode_signal_") then
+        local unit_key = element.name:match("^agricultural_roboport_circuit_mode_signal_(.+)$")
+        if unit_key then
+            local num_key = tonumber(unit_key)
+            if num_key then unit_key = num_key end
+            if not storage.agricultural_roboports[unit_key] then
+                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
+            end
+            local settings = storage.agricultural_roboports[unit_key]
+            if element.elem_value then
+                settings.circuit_mode_signal = element.elem_value
+                write_file_log("[UI] Set circuit mode signal for key=", tostring(unit_key), " to ", serpent.line(element.elem_value))
+            end
+        end
+    end
 end
 
 -- Handle quality dropdown selection changes
 -- Deferred elem_value setter for choose-elem-buttons
 function UI.on_tick(event)
-    if not _G._agroport_deferred_elem then return end
-    for player_index, btns in pairs(_G._agroport_deferred_elem) do
-        -- Verify player exists (may be nil in editor mode)
-        local player = game.get_player(player_index)
-        if not player then
-            _G._agroport_deferred_elem[player_index] = nil
-            goto continue
-        end
-        
-        for _, entry in pairs(btns) do
-            if entry.button and entry.button.valid then
-                entry.button.elem_value = entry.value
+    -- Handle deferred elem_value setting for choose-elem-buttons
+    if _G._agroport_deferred_elem then
+        for player_index, btns in pairs(_G._agroport_deferred_elem) do
+            -- Verify player exists (may be nil in editor mode)
+            local player = game.get_player(player_index)
+            if not player then
+                _G._agroport_deferred_elem[player_index] = nil
+                goto continue
             end
+            
+            for _, entry in pairs(btns) do
+                if entry.button and entry.button.valid then
+                    entry.button.elem_value = entry.value
+                end
+            end
+            _G._agroport_deferred_elem[player_index] = nil
+            ::continue::
         end
-        _G._agroport_deferred_elem[player_index] = nil
-        ::continue::
+    end
+    
+    -- Update open roboport GUIs with circuit filter changes (every 10 ticks for performance)
+    if event.tick % 10 == 0 then
+        UI.update_open_guis()
     end
 end
 
@@ -867,7 +1213,7 @@ function rebuild_filter_table(player, unit_key, old_filter_table, settings, surf
             elem_filters = {
                 {filter = "name", name = seed_names}
             },
-            enabled = settings.use_filter or false,
+            enabled = (settings.use_filter and not (settings.circuit_filter_enabled or false)),
             style = "slot_button"
         }
         
@@ -884,11 +1230,11 @@ function rebuild_filter_table(player, unit_key, old_filter_table, settings, surf
     end
     
     -- Update button states
-    update_filter_buttons_and_compress_filters(unit_key, filter_table, settings.use_filter or false, filters)
+    update_filter_buttons_and_compress_filters(unit_key, filter_table, settings.use_filter or false, filters, false)
 end
 
 -- Helper: update filter buttons and compress filters with quality support
-function update_filter_buttons_and_compress_filters(unit_key, filter_table, use_filter_enabled, filters)
+function update_filter_buttons_and_compress_filters(unit_key, filter_table, use_filter_enabled, filters, circuit_controls_filters)
     -- Compress filters array to the start (remove nil gaps)
     local compressed_filters = {}
     for i = 1, 5 do
@@ -928,7 +1274,7 @@ function update_filter_buttons_and_compress_filters(unit_key, filter_table, use_
         end
     end
     
-    -- Enable/disable filter slots based on use_filter and slot status
+    -- Enable/disable filter slots based on use_filter, circuit control, and slot status
     local first_empty = nil
     for i = 1, 5 do
         local filter_entry = compressed_filters[i]
@@ -940,7 +1286,10 @@ function update_filter_buttons_and_compress_filters(unit_key, filter_table, use_
     for i = 1, 5 do
         local filter_btn = filter_table["agricultural_roboport_filter_" .. tostring(unit_key) .. "_" .. tostring(i)]
         if filter_btn and filter_btn.valid then
-            if use_filter_enabled then
+            -- Disable if circuit controls filters
+            if circuit_controls_filters then
+                filter_btn.enabled = false
+            elseif use_filter_enabled then
                 -- Enable if has value OR is first empty slot
                 filter_btn.enabled = (compressed_filters[i] ~= nil or i == first_empty)
             else
@@ -952,6 +1301,20 @@ function update_filter_buttons_and_compress_filters(unit_key, filter_table, use_
     -- Save compressed filters back to settings table
     local settings = storage.agricultural_roboports[unit_key]
     settings.filters = compressed_filters
+    
+    -- Update filter visualization in alt-mode
+    local entity = nil
+    for _, surface in pairs(game.surfaces) do
+        local entities = surface.find_entities_filtered{name = "agricultural-roboport"}
+        for _, ent in ipairs(entities) do
+            if ent.unit_number == tonumber(unit_key) then
+                entity = ent
+                break
+            end
+        end
+        if entity then break end
+    end
+    
     return compressed_filters
 end
 
@@ -1084,6 +1447,8 @@ function UI.on_gui_checked_state_changed(event)
             local new_state = (element.state == true)
             settings.use_filter = new_state
             write_file_log("[UI] Use filters checkbox for key=", tostring(unit_key), "state=", tostring(new_state))
+            -- Get circuit filter control state
+            local circuit_controls_filters = settings.circuit_filter_enabled or false
             -- Gray out or enable filter controls accordingly
             local parent = element.parent and element.parent.parent
             if parent then
@@ -1092,13 +1457,13 @@ function UI.on_gui_checked_state_changed(event)
                     for _, child in pairs(controls_row.children) do
                         if child.type == "flow" then
                             for _, subchild in pairs(child.children) do
-                                subchild.enabled = new_state
+                                subchild.enabled = new_state and not circuit_controls_filters
                             end
                         elseif child.type == "table" then
                             local filters = settings.filters or {}
-                            update_filter_buttons_and_compress_filters(unit_key, child, new_state, filters)
+                            update_filter_buttons_and_compress_filters(unit_key, child, new_state, filters, circuit_controls_filters)
                         else
-                            child.enabled = new_state
+                            child.enabled = new_state and not circuit_controls_filters
                         end
                     end
                 end
@@ -1115,6 +1480,109 @@ function UI.on_gui_checked_state_changed(event)
             end
             local settings = storage.agricultural_roboports[unit_key]
             settings.seed_logistic_only = element.state
+        end
+    -- Handle 'Set mode of operation from circuit' checkbox
+    elseif element_name and element_name:find("^agricultural_roboport_circuit_mode_enable_") then
+        local unit_key = element_name:match("^agricultural_roboport_circuit_mode_enable_(.+)$")
+        if unit_key then
+            local num_key = tonumber(unit_key)
+            if num_key then unit_key = num_key end
+            if not storage.agricultural_roboports[unit_key] then
+                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
+            end
+            local settings = storage.agricultural_roboports[unit_key]
+            settings.circuit_mode_enabled = element.state
+            
+            -- Enable/disable mode signal picker
+            local parent = element.parent
+            if parent then
+                local signal_btn = parent["agricultural_roboport_circuit_mode_signal_" .. tostring(unit_key)]
+                if signal_btn then
+                    signal_btn.enabled = element.state
+                end
+            end
+            
+            -- Enable/disable mode switch based on circuit control
+            -- Navigate up to frame level: element -> mode_control_flow -> circuit_section -> frame
+            local frame = element.parent and element.parent.parent and element.parent.parent.parent
+            if frame then
+                local mode_switch = frame["agricultural_roboport_mode_switch_" .. tostring(unit_key)]
+                if mode_switch then
+                    mode_switch.enabled = not element.state
+                    write_file_log("[CHECKBOX] Set mode_switch.enabled =", not element.state)
+                    -- When disabling circuit control, restore the switch to show the stored mode
+                    if not element.state then
+                        mode_switch.switch_state = mode_to_switch_state(settings.mode or 0)
+                        write_file_log("[CHECKBOX] Restored mode_switch to", settings.mode or 0)
+                    end
+                end
+            end
+        end
+    -- Handle 'Set filters from circuit' checkbox
+    elseif element_name and element_name:find("^agricultural_roboport_circuit_filter_enable_") then
+        local unit_key = element_name:match("^agricultural_roboport_circuit_filter_enable_(.+)$")
+        if unit_key then
+            local num_key = tonumber(unit_key)
+            if num_key then unit_key = num_key end
+            if not storage.agricultural_roboports[unit_key] then
+                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
+            end
+            local settings = storage.agricultural_roboports[unit_key]
+            settings.circuit_filter_enabled = element.state
+            
+            -- Enable/disable manual filter controls
+            local grandparent = element.parent and element.parent.parent
+            if grandparent then
+                local use_filter_outer = grandparent["agricultural_roboport_filter_flow_" .. tostring(unit_key)]
+                if use_filter_outer then
+                    local filter_outer = use_filter_outer["agricultural_roboport_filter_outer_flow_" .. tostring(unit_key)]
+                    if filter_outer then
+                        local use_filter_checkbox = nil
+                        for _, child in pairs(filter_outer.children) do
+                            if child.type == "flow" then
+                                for _, subchild in pairs(child.children) do
+                                    if subchild.name and subchild.name:find("^agricultural_roboport_use_filter_checkbox_") then
+                                        use_filter_checkbox = subchild
+                                        break
+                                    end
+                                end
+                            end
+                        end
+                        
+                        if use_filter_checkbox then
+                            use_filter_checkbox.enabled = not element.state
+                        end
+                        
+                        local filter_controls = filter_outer["agricultural_roboport_filter_controls_row_" .. tostring(unit_key)]
+                        if filter_controls then
+                            local filter_table = filter_controls["agricultural_roboport_filter_table_" .. tostring(unit_key)]
+                            
+                            -- Update all filter controls and individual buttons
+                            for _, child in pairs(filter_controls.children) do
+                                if element.state then
+                                    child.enabled = false
+                                else
+                                    -- Re-enable based on use_filter checkbox state
+                                    if use_filter_checkbox then
+                                        child.enabled = use_filter_checkbox.state
+                                    end
+                                end
+                            end
+                            
+                            -- Explicitly update filter buttons using the helper function
+                            if filter_table then
+                                update_filter_buttons_and_compress_filters(
+                                    unit_key,
+                                    filter_table,
+                                    use_filter_checkbox and use_filter_checkbox.state or false,
+                                    settings.filters or {},
+                                    element.state
+                                )
+                            end
+                        end
+                    end
+                end
+            end
         end
     end
 end
@@ -1284,6 +1752,12 @@ function UI.on_gui_switch_state_changed(event)
                             local filter_table = filter_controls["agricultural_roboport_filter_table_" .. tostring(unit_key)]
                             if filter_table and roboport_entity then
                                 rebuild_filter_table(player, unit_key, filter_table, settings, roboport_entity.surface)
+                                -- After rebuild, update button states based on circuit control
+                                local new_filter_table = filter_controls["agricultural_roboport_filter_table_" .. tostring(unit_key)]
+                                if new_filter_table then
+                                    local circuit_controls_filters = settings.circuit_filter_enabled or false
+                                    update_filter_buttons_and_compress_filters(unit_key, new_filter_table, settings.use_filter or false, settings.filters or {}, circuit_controls_filters)
+                                end
                             end
                         end
                     end

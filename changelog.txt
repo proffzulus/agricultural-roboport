@@ -1,5 +1,19 @@
 
 ---------------------------------------------------------------------------------------------------
+Version: 1.3.7
+Date: 2026-02-09
+  Major Features:
+    - Added circuit network support for Agricultural Roboports
+    - Operating mode can now be controlled by circuit signals (negative = harvest only, zero = both, positive = seed only)
+    - Filters can be set from circuit signals - seed items with value > 0 become filters, quality is read from the signal
+    - UI displays circuit-controlled values in real-time and disables manual controls when circuit takes over
+  Improvements:
+    - Circuit settings are preserved when copying/pasting, blueprinting, or when entities are destroyed and revived
+    - Added translations for circuit network features in all supported languages
+  Bugfixes:
+    - Fixed settings being lost when destroyed roboports are auto-ghosted and later revived
+
+---------------------------------------------------------------------------------------------------
 Version: 1.3.6
 Date: 2026-01-10
   Improvements:

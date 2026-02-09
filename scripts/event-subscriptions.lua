@@ -128,6 +128,12 @@ function event_subscriptions.register_all(handlers)
     end)
 
     script.on_event(defines.events.on_tick, function(event)
+        -- Call deferred rebuild handler first (from control.lua on_load)
+        if handlers.deferred_rebuild then
+            handlers.deferred_rebuild()
+        end
+        
+        -- Then call UI on_tick for GUI updates
         if handlers.ui and handlers.ui.on_tick then
             handlers.ui.on_tick(event)
         end

@@ -16,6 +16,9 @@ local event_subscriptions = require("scripts.event-subscriptions")
 require("scripts.agricultural-roboport")
 require("debug-commands")
 
+-- Module-level flag for deferred rebuild (cannot use storage in on_load)
+local rebuild_on_next_tick = false
+
 -- Make write_file_log global for all modules to use
 function write_file_log(...)
     return util.write_file_log(...)
@@ -71,6 +74,9 @@ function create_default_roboport_settings()
         use_filter = false,
         filter_invert = false,
         filters = nil,
+        circuit_mode_enabled = false,
+        circuit_mode_signal = nil,
+        circuit_filter_enabled = false,
         surface = nil,
         position = nil
     }
@@ -176,12 +182,17 @@ script.on_load(function()
     tdm.reload_settings()
     
     -- Schedule recreation of quality sprites and virtual_seed_info rebuild on the next tick
-    -- Always rebuild virtual_seed_info to pick up any prototype changes since the save was created
-    script.on_event(defines.events.on_tick, function(event)
-        -- Unregister this one-shot handler immediately
-        script.on_event(defines.events.on_tick, nil)
-        
-        -- Always rebuild virtual_seed_info on load (deferred from on_load to avoid mutating storage during on_load)
+    -- Use module-level variable (cannot modify storage in on_load)
+    rebuild_on_next_tick = true
+    write_file_log("=== on_load() COMPLETE ===")
+end)
+
+-- Handle deferred rebuild from on_load (called by main on_tick handler)
+local function handle_deferred_rebuild()
+    if not rebuild_on_next_tick then return end
+    rebuild_on_next_tick = false
+    
+    -- Always rebuild virtual_seed_info on load (deferred from on_load to avoid mutating storage during on_load)
         if Build_virtual_seed_info then
             write_file_log("=== on_load deferred rebuild: Rebuilding virtual_seed_info ===")
             storage.virtual_seed_info = Build_virtual_seed_info()
@@ -308,9 +319,7 @@ script.on_load(function()
         end
         
         if write_file_log then write_file_log("[QUALITY] on_load: Sprite recreation complete, total sprites=", table_size(quality_plant_sprites)) end
-    end)
-    write_file_log("=== on_load() COMPLETE ===")
-end)
+end
 
 -- =====================
 -- Handler functions region
@@ -687,6 +696,9 @@ local function copy_roboport_settings(source_key, dest_key)
     dest.seed_logistic_only = src.seed_logistic_only or false
     dest.use_filter = src.use_filter or false
     dest.filter_invert = src.filter_invert or false
+    dest.circuit_mode_enabled = src.circuit_mode_enabled or false
+    dest.circuit_mode_signal = src.circuit_mode_signal
+    dest.circuit_filter_enabled = src.circuit_filter_enabled or false
     if type(src.filters) == "table" then
         local new_filters = {}
         for i = 1, 5 do new_filters[i] = src.filters[i] end
@@ -751,6 +763,9 @@ local function on_built_event_handler(event)
             settings.use_filter = entity.tags.use_filter or false
             settings.filter_invert = entity.tags.filter_invert or false
             settings.filters = (type(entity.tags.filters) == "table" and (function() local f = {}; for i=1,5 do f[i]=entity.tags.filters[i] end; return f end)()) or nil
+            settings.circuit_mode_enabled = entity.tags.circuit_mode_enabled or false
+            settings.circuit_mode_signal = entity.tags.circuit_mode_signal
+            settings.circuit_filter_enabled = entity.tags.circuit_filter_enabled or false
             settings.surface = entity.surface.name
             settings.position = {x = entity.position.x, y = entity.position.y}
             storage.agricultural_roboports[ghost_key] = settings
@@ -809,6 +824,9 @@ local function on_built_event_handler(event)
             settings.use_filter = event.tags.use_filter or false
             settings.filter_invert = event.tags.filter_invert or false
             settings.filters = (type(event.tags.filters) == "table" and (function() local f = {}; for i=1,5 do f[i]=event.tags.filters[i] end; return f end)()) or nil
+            settings.circuit_mode_enabled = event.tags.circuit_mode_enabled or false
+            settings.circuit_mode_signal = event.tags.circuit_mode_signal
+            settings.circuit_filter_enabled = event.tags.circuit_filter_enabled or false
             settings.surface = entity.surface.name
             settings.position = {x = entity.position.x, y = entity.position.y}
             write_file_log("[Event] About to assign to storage", "unit_number=", entity.unit_number, "type=", type(entity.unit_number))
@@ -865,9 +883,29 @@ end
 local function on_remove_agricultural_roboport(event)
     local entity = event.entity
     if entity and entity.name == "agricultural-roboport" then
-        storage.agricultural_roboports[entity.unit_number] = nil
-        write_file_log("[Event] Roboport removed", "unit=", entity.unit_number)
-        tdm.mark_dirty()
+        local settings = storage.agricultural_roboports[entity.unit_number]
+        
+        if settings then
+            -- Check if this is a death (not deconstruction) by checking event name
+            -- on_entity_died = entity was destroyed (will be auto-ghosted if configured)
+            -- on_player_mined_entity or on_robot_mined_entity = intentional removal
+            local is_death = (event.name == defines.events.on_entity_died)
+            
+            if is_death then
+                -- Entity died (not deconstructed) - it will likely be auto-ghosted
+                -- Convert settings to ghost_key format so they can be retrieved when revived
+                local ghost_key = string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
+                storage.agricultural_roboports[ghost_key] = settings
+                write_file_log("[Event] Roboport died, saved settings for ghost revival", "unit=", entity.unit_number, "ghost_key=", ghost_key)
+            else
+                -- Entity was mined/deconstructed intentionally - don't preserve settings
+                write_file_log("[Event] Roboport mined/deconstructed", "unit=", entity.unit_number)
+            end
+            
+            -- Always remove the unit_number entry
+            storage.agricultural_roboports[entity.unit_number] = nil
+            tdm.mark_dirty()
+        end
     end
 end
 
@@ -921,6 +959,9 @@ local function on_player_setup_blueprint(event)
                     seed_logistic_only = settings.seed_logistic_only or false,
                     use_filter = settings.use_filter or false,
                     filter_invert = settings.filter_invert or false,
+                    circuit_mode_enabled = settings.circuit_mode_enabled or false,
+                    circuit_mode_signal = settings.circuit_mode_signal,
+                    circuit_filter_enabled = settings.circuit_filter_enabled or false,
                 }
                 if type(settings.filters) == "table" then
                     tags.filters = {}
@@ -938,6 +979,9 @@ local function on_player_setup_blueprint(event)
                         seed_logistic_only = settings.seed_logistic_only or false,
                         use_filter = settings.use_filter or false,
                         filter_invert = settings.filter_invert or false,
+                        circuit_mode_enabled = settings.circuit_mode_enabled or false,
+                        circuit_mode_signal = settings.circuit_mode_signal,
+                        circuit_filter_enabled = settings.circuit_filter_enabled or false,
                     }
                     if type(settings.filters) == "table" then
                         tags.filters = {}
@@ -978,6 +1022,58 @@ process_agricultural_roboport = function(entity, tick)
     local settings = storage.agricultural_roboports[entity.unit_number] or {}
     local mode = settings.mode or 0
     local seed_logistic_only = settings.seed_logistic_only or false
+    
+    -- Circuit network: check if "set operating mode" is enabled in settings
+    -- If enabled, read the configured signal value and override mode
+    if settings.circuit_mode_enabled and entity.get_control_behavior then
+        local control_behavior = entity.get_control_behavior()
+        
+        if control_behavior then
+            -- Get the configured signal to monitor for mode control
+            local mode_signal = settings.circuit_mode_signal or {type = "virtual", name = "signal-M"}
+            
+            if mode_signal and mode_signal.name then
+                -- Read signal value from circuit network
+                local red_network = entity.get_circuit_network(defines.wire_connector_id.circuit_red)
+                local green_network = entity.get_circuit_network(defines.wire_connector_id.circuit_green)
+                
+                local signal_value = 0
+                
+                -- Check red network
+                if red_network then
+                    local signal = red_network.get_signal(mode_signal)
+                    if signal then
+                        signal_value = signal_value + signal
+                    end
+                end
+                
+                -- Check green network
+                if green_network then
+                    local signal = green_network.get_signal(mode_signal)
+                    if signal then
+                        signal_value = signal_value + signal
+                    end
+                end
+                
+                -- Interpret signal value to determine mode:
+                -- negative = harvest only (-1)
+                -- zero = both (0)
+                -- positive = seed only (1)
+                if signal_value < 0 then
+                    mode = -1 -- Harvest only
+                elseif signal_value > 0 then
+                    mode = 1 -- Seed only
+                else
+                    mode = 0 -- Both
+                end
+                
+                if write_file_log then
+                    write_file_log("[CIRCUIT] Operating mode from circuit:", "signal=", mode_signal.name, "value=", signal_value, "mode=", mode)
+                end
+            end
+        end
+    end
+    
     if entity.status == defines.entity_status.working then
         entity.custom_status = {diode = defines.entity_status_diode.green, label = get_operating_mode_name and get_operating_mode_name(mode) or ""}
     end
@@ -1001,6 +1097,7 @@ end
 local function on_entity_removed_dispatch(event)
     -- Keep existing roboport removal behavior
     pcall(function() on_remove_agricultural_roboport(event) end)
+    
     -- If a plant was removed/mined, attempt to apply stored quality to the harvest buffer
     if event and event.entity and event.entity.valid and event.entity.type == "plant" then
         local inv_buffer = event.buffer
@@ -1052,7 +1149,8 @@ event_subscriptions.register_all({
         end
     },
     vegetation_planner = vegetation_planner,
-    ui = UI
+    ui = UI,
+    deferred_rebuild = handle_deferred_rebuild
 })
 
 script.on_configuration_changed(function()

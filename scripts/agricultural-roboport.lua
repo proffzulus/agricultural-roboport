@@ -186,6 +186,74 @@ function seed(roboport, seed_logistic_only)
     if type(filters) ~= "table" then filters = {} end
     local use_filter = rsettings.use_filter or false
     local filter_invert = rsettings.filter_invert or false
+    
+    -- Circuit network: check if "set filters" mode is enabled
+    -- If enabled, read circuit signals and override manual filters
+    local circuit_filter_enabled = rsettings.circuit_filter_enabled or false
+    
+    if circuit_filter_enabled and roboport.get_control_behavior and roboport.get_control_behavior() then
+        local control_behavior = roboport.get_control_behavior()
+        
+        -- Read circuit network signals for filters
+        local red_network = roboport.get_circuit_network(defines.wire_connector_id.circuit_red)
+        local green_network = roboport.get_circuit_network(defines.wire_connector_id.circuit_green)
+        
+        -- If circuit filter control is enabled and connected to circuit network, read signals
+        if (red_network or green_network) then
+            -- Read all signals from both networks
+            local circuit_filters = {}
+            
+            local function process_network_signals(network)
+                if not network then return end
+                local signals = network.signals
+                if not signals then return end
+                
+                for _, signal_data in ipairs(signals) do
+                    if signal_data.signal and signal_data.signal.name and signal_data.count > 0 then
+                        local signal_name = signal_data.signal.name
+                        
+                        -- Check if this signal corresponds to a seed item (only accept seedable items)
+                        if virtual_seed_info[signal_name] then
+                            -- Extract quality from item signal if it has quality information
+                            -- In Factorio 2.0+, item signals can have quality embedded
+                            local quality_name = "normal" -- Default quality
+                            
+                            -- Extract quality from signal (quality field is a string, not an object)
+                            if signal_data.signal.quality then
+                                quality_name = signal_data.signal.quality
+                            end
+                            
+                            -- Add to circuit filters
+                            table.insert(circuit_filters, {
+                                name = signal_name,
+                                quality = quality_name
+                            })
+                            
+                            if write_file_log then
+                                write_file_log("[CIRCUIT DEBUG] Added filter:", signal_name, "with quality:", quality_name)
+                            end
+                        end
+                    end
+                end
+            end
+            
+            process_network_signals(red_network)
+            process_network_signals(green_network)
+            
+            -- Override manual filters with circuit filters
+            if #circuit_filters > 0 or not read_contents then
+                -- If we have circuit filters OR circuit is in "set filters" mode with no signals,
+                -- override manual filters
+                filters = circuit_filters
+                use_filter = true
+                -- filter_invert stays as per manual setting (circuit doesn't control whitelist/blacklist mode)
+                
+                if write_file_log then
+                    write_file_log("[CIRCUIT] Set filters from circuit network:", #circuit_filters, "filters")
+                end
+            end
+        end
+    end
 
     -- Recompute precomputed positions when the requested seeding mode (logistic-only vs construction) differs
     local requested_mode = not not seed_logistic_only -- ensure boolean
@@ -251,11 +319,11 @@ function seed(roboport, seed_logistic_only)
         end
     end
 
-    local max_seeds = (settings.global["agricultural-roboport-max-seeds-per-tick"] and settings.global["agricultural-roboport-max-seeds-per-tick"].value) or 10
+    local max_seeds = (settings and settings.global and settings.global["agricultural-roboport-max-seeds-per-tick"] and settings.global["agricultural-roboport-max-seeds-per-tick"].value) or 10
     local placed = 0
 
     -- Per-call checks limit (controls CPU work per call)
-    local checks_per_call = (settings.global["agricultural-roboport-seed-checks-per-call"] and settings.global["agricultural-roboport-seed-checks-per-call"].value) or 10
+    local checks_per_call = (settings and settings.global and settings.global["agricultural-roboport-seed-checks-per-call"] and settings.global["agricultural-roboport-seed-checks-per-call"].value) or 10
 
     local positions = rsettings.precomputed.seed_positions or {}
     local total_positions = #positions
@@ -503,11 +571,11 @@ function harvest(roboport, current_tick)
         end
     end
     -- Harvest fully grown plants and neutral entities, but limit work per call
-    local max_harvest = (settings.global["agricultural-roboport-max-harvest-per-call"] and settings.global["agricultural-roboport-max-harvest-per-call"].value) or 5
+    local max_harvest = (settings and settings.global and settings.global["agricultural-roboport-max-harvest-per-call"] and settings.global["agricultural-roboport-max-harvest-per-call"].value) or 5
     local harvest_done = 0
     local inspect_limit = math.max(20, max_harvest * 10)
 
-    local ignore_cliffs = (settings.global["agricultural-roboport-ignore-cliffs"] and settings.global["agricultural-roboport-ignore-cliffs"].value) or false
+    local ignore_cliffs = (settings and settings.global and settings.global["agricultural-roboport-ignore-cliffs"] and settings.global["agricultural-roboport-ignore-cliffs"].value) or false
 
     -- Ensure we have a precomputed grid of harvest positions (small cells) to scan incrementally
     rsettings.precomputed = rsettings.precomputed or {}
