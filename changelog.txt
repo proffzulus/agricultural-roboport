@@ -1,5 +1,22 @@
 
 ---------------------------------------------------------------------------------------------------
+Version: 1.3.8
+Date: 2026-02-13
+  Major Features:
+    - Quality mutation system overhaul with environmental scaling
+    - Added Controlled Mutations research technology (8 levels) providing directional mutation control
+    - Mutation chance now scales dynamically with pollution levels (0.5% base to 20% max at 50-500 pollution)
+    - Solar intensity affects mutation rates (varies by planet)
+    - Pollution reduces improvement chance while increasing overall mutation rate
+    - Quality level penalty: each quality tier reduces improvement chance by 20%
+  Improvements:
+    - Added mutation visualization with colored flying text showing mutation events (green for improvements, red for degradation)
+    - Mutation visualization is now a per-player setting allowing individual preferences
+    - Localized mutation notification text for all supported languages
+  Changes:
+    - Removed mutation chance multiplier setting (replaced by environmental scaling system)
+
+---------------------------------------------------------------------------------------------------
 Version: 1.3.7
 Date: 2026-02-09
   Major Features:

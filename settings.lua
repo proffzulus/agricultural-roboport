@@ -32,6 +32,14 @@ local agricultural_roboport_settings = {
   }
   ,
   {
+    type = "bool-setting",
+    name = "agricultural-roboport-mutation-visualization",
+    setting_type = "runtime-per-user",
+    default_value = true,
+    order = "b-2"
+  }
+  ,
+  {
     type = "int-setting",
     name = "agricultural-roboport-tdm-period",
     setting_type = "runtime-global",
@@ -80,22 +88,14 @@ local agricultural_roboport_settings = {
   }
   ,
   {
-    type = "double-setting",
-    name = "agricultural-roboport-quality-proc-multiplier",
-    setting_type = "runtime-global",
-    default_value = 1.0,
-    minimum_value = 0.0,
-    maximum_value = 200.0,
-    order = "h"
-  },
-  {
     type = "int-setting",
     name = "agricultural-roboport-quality-improvement-chance",
     setting_type = "runtime-global",
     default_value = 10,
     minimum_value = 0,
     maximum_value = 100,
-    order = "h-1"
+    order = "h-1",
+    hidden = true  -- Replaced by controlled mutations research
   }}
   if mods["quality"] then 
 	log("Quality mod detected: Enabling quality settings for Agricultural Roboport");

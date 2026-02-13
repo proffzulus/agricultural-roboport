@@ -391,14 +391,20 @@ local function register_plant(plant, quality)
     end
 end
 
-local function harvest_plant(plant, inv_buffer)
+local function harvest_plant(plant, inv_buffer, harvester_force)
     -- Skip quality tracking if disabled
-    if not is_quality_enabled() then return end
+    if not is_quality_enabled() then 
+        if write_file_log then write_file_log("[QUALITY] harvest_plant: quality disabled, skipping") end
+        return 
+    end
+    
+    -- Use harvester's force for research checks, fallback to plant force (which will be neutral)
+    local force_to_use = harvester_force or plant.force
     
     storage.quality_plants = storage.quality_plants or {}
     local key = hash_string(plant.position.x, plant.position.y, plant.surface.name)
     local plant_quality_data = storage.quality_plants[key]
-    if write_file_log then write_file_log("[QUALITY] harvest_plant called:", "plant=", plant.name, "pos=", serpent and serpent.line and serpent.line(plant.position) or tostring(plant.position), "key=", key, "has_registry=", tostring(plant_quality_data ~= nil)) end
+    if write_file_log then write_file_log("[QUALITY] harvest_plant called:", "plant=", plant.name, "pos=", serpent and serpent.line and serpent.line(plant.position) or tostring(plant.position), "key=", key, "has_registry=", tostring(plant_quality_data ~= nil), "inv_buffer=", tostring(inv_buffer ~= nil), "harvester_force=", harvester_force and harvester_force.name or "nil", "force_to_use=", force_to_use.name) end
     
     local harvest_quality = nil
     if plant_quality_data then
@@ -427,21 +433,114 @@ local function harvest_plant(plant, inv_buffer)
         end
     end
 
-    -- If final_quality is nil or normal, consider per-plant proc to mutate quality
-    local function get_proc_multiplier()
-        if settings and settings.global and settings.global["agricultural-roboport-quality-proc-multiplier"] then
-            return settings.global["agricultural-roboport-quality-proc-multiplier"].value or 1.0
+    -- Get controlled mutation research level (0-5)
+    local function get_controlled_mutation_level(force)
+        -- Handle neutral/nil force (return 0 = no research bonus)
+        if not force or not force.technologies then
+            if write_file_log then write_file_log("[QUALITY] get_controlled_mutation_level: force or technologies is nil") end
+            return 0
         end
+        
+        if write_file_log then write_file_log("[QUALITY] Checking research level for force:", force.name) end
+        
+        for level = 8, 1, -1 do
+            local tech_name = "agricultural-controlled-mutations-" .. tostring(level)
+            local tech = force.technologies[tech_name]
+            if write_file_log then 
+                write_file_log("[QUALITY] Checking tech:", tech_name, "exists=", tostring(tech ~= nil), "researched=", tech and tostring(tech.researched) or "N/A") 
+            end
+            if tech and tech.researched then
+                if write_file_log then write_file_log("[QUALITY] Found research level:", level) end
+                return level
+            end
+        end
+        if write_file_log then write_file_log("[QUALITY] No controlled mutation research found, returning 0") end
+        return 0
+    end
+    
+    -- Get solar intensity multiplier for this surface
+    local function get_solar_intensity(surface)
+        -- Try surface.solar_power_multiplier first (Factorio 2.0+)
+        if surface.solar_power_multiplier then
+            return surface.solar_power_multiplier
+        end
+        -- Fallback: try reading from planet prototype via surface properties
+        if surface.planet and surface.planet.prototype and surface.planet.prototype.solar_power_multiplier then
+            return surface.planet.prototype.solar_power_multiplier
+        end
+        -- Default to 1.0 if neither available
         return 1.0
+    end
+    
+    -- Get pollution-based mutation multiplier (scales from 1.0x at pollution 50 to 40.0x at pollution 500)
+    -- With solar=1.0 and pollution=500: 0.5% * 1.0 * 40.0 = 20% (clamped)
+    local function get_pollution_multiplier(surface, position)
+        local pollution = surface.get_pollution(position)
+        
+        -- No pollution bonus below threshold of 50
+        if pollution < 50 then
+            return 1.0
+        end
+        
+        -- Linear scaling from 1.0x to 40.0x between pollution 50 and 500
+        -- At pollution = 50: multiplier = 1.0
+        -- At pollution = 500: multiplier = 40.0
+        local multiplier = 1.0 + (pollution - 50) / (500 - 50) * 39.0
+        
+        -- Clamp to max 40x multiplier
+        return math.min(40.0, multiplier)
     end
 
     local mutated = false
     local qname = (type(final_quality) == "table" or type(final_quality) == "userdata") and final_quality.name or (type(final_quality) == "string" and final_quality or "normal")
 
-    -- Allow deterministic per-plant proc for any quality (not just "normal").
+    if write_file_log then write_file_log("[QUALITY] About to calculate mutation chance:", "final_quality=", tostring(final_quality), "qname=", qname) end
+
+    -- Calculate mutation chance: clamp((base * solar) * pollution, 0.5%, 20%)
+    -- Base chance: 0.5% (0.005)
+    -- Solar multiplier: varies by surface (0.5 Gleba, 1.0 Nauvis, 3.0 Vulcanus, etc.)
+    -- Pollution multiplier: 1.0x to 40.0x (pollution 50-500)
+    -- Final range: 0.5% to 20% (clamped)
+    -- Examples:
+    --   Nauvis (solar=1.0), pollution=500: 0.5% * 1.0 * 40 = 20% (clamped)
+    --   Gleba (solar=0.5), pollution=500: 0.5% * 0.5 * 40 = 10%
+    --   Vulcanus (solar=3.0), pollution=500: 0.5% * 3.0 * 40 = 60% → 20% (clamped)
     local base_chance = 0.005 -- 0.5%
-    local chance = base_chance * get_proc_multiplier()
-	if write_file_log then write_file_log("[QUALITY] Base proc chance:", base_chance, "multiplier=", get_proc_multiplier(), "final chance=", chance, "current quality=", qname) end
+    
+    local solar_multiplier = 1.0
+    local ok2, result2 = pcall(get_solar_intensity, plant.surface)
+    if ok2 then 
+        solar_multiplier = result2
+        if write_file_log then write_file_log("[QUALITY] solar_multiplier:", solar_multiplier) end
+    else
+        if write_file_log then write_file_log("[QUALITY] ERROR getting solar_multiplier:", tostring(result2)) end
+    end
+    
+    local pollution_multiplier = 1.0
+    local ok3, result3 = pcall(get_pollution_multiplier, plant.surface, plant.position)
+    if ok3 then 
+        pollution_multiplier = result3
+        if write_file_log then write_file_log("[QUALITY] pollution_multiplier:", pollution_multiplier) end
+    else
+        if write_file_log then write_file_log("[QUALITY] ERROR getting pollution_multiplier:", tostring(result3)) end
+    end
+    
+    -- Formula: clamp((base * solar) * pollution, 0.5%, 20%)
+    local base_with_solar = base_chance * solar_multiplier
+    local chance = base_with_solar * pollution_multiplier
+    chance = math.max(0.005, math.min(0.20, chance))  -- Clamp between 0.5% and 20%
+    
+    -- Calculate pollution bonus for improvement penalty
+    local pollution_bonus = (chance - base_with_solar) * 0.5
+    
+    if write_file_log then 
+        write_file_log("[QUALITY] Mutation chance calculation:", 
+            "base=", base_chance, 
+            "solar_mult=", solar_multiplier,
+            "pollution_mult=", pollution_multiplier,
+            "final_chance=", chance, 
+            "current_quality=", qname) 
+    end
     if chance > 0 then
         if write_file_log then write_file_log("[QUALITY] Rolling for quality mutation (math.random):", "chance=", chance, "current quality=", qname) end
         -- Use math.random for sampling (simpler, server-controlled in multiplayer)
@@ -454,14 +553,24 @@ local function harvest_plant(plant, inv_buffer)
             if type(final_quality) == "table" or type(final_quality) == "userdata" then
                 quality_level = final_quality.level or 0
             end
-            -- Get quality improvement chance from settings (0-100%)
-            local improvement_chance = 0.1 -- default 10%
-            if settings and settings.global and settings.global["agricultural-roboport-quality-improvement-chance"] then
-                improvement_chance = settings.global["agricultural-roboport-quality-improvement-chance"].value / 100.0
+            
+            -- Get controlled mutation research level and calculate improvement chance
+            local research_level = get_controlled_mutation_level(force_to_use)
+            local base_improvement_chance = research_level * 0.20  -- 0%, 20%, 40%, 60%, 80%, 100%
+            -- Pollution reduces improvement chance (high pollution = more chaotic mutations)
+            local adjusted_improvement_chance = base_improvement_chance - (quality_level * 0.20) - pollution_bonus
+            
+            if write_file_log then 
+                write_file_log("[QUALITY] Improvement calculation:", 
+                    "research_level=", research_level,
+                    "base_improvement=", base_improvement_chance,
+                    "quality_level=", quality_level,
+                    "pollution_bonus=", pollution_bonus,
+                    "adjusted_improvement=", adjusted_improvement_chance,
+                    "dir_sample=", dir_sample)
             end
-            local adjusted_chance = improvement_chance - (quality_level * 0.01)
-			if write_file_log then write_file_log("[QUALITY] Direction roll (math.random): dir_sample=", dir_sample, "Probing against level adjustment of", adjusted_chance) end
-            local dir = (dir_sample < adjusted_chance) and 1 or -1
+            
+            local dir = (dir_sample < adjusted_improvement_chance) and 1 or -1
             if write_file_log then write_file_log("[QUALITY] Direction roll (math.random): sample=", dir_sample, "dir=", dir) end
             local cur = qname
             local new_q = adjacent_quality_name(cur, dir)
@@ -469,7 +578,66 @@ local function harvest_plant(plant, inv_buffer)
                 final_quality = new_q
                 mutated = true
             end
-            if write_file_log then write_file_log("[QUALITY] RNG SUMMARY (math.random):", "chance=", chance, "sample=", sample, "dir_sample=", dir_sample, "dir=", dir, "current=", cur, "new=", new_q, "mutated=", tostring(mutated)) end
+            if write_file_log then 
+                write_file_log("[QUALITY] RNG SUMMARY (math.random):", 
+                    "chance=", chance, 
+                    "sample=", sample, 
+                    "dir_sample=", dir_sample, 
+                    "dir=", dir, 
+                    "current=", cur, 
+                    "new=", new_q, 
+                    "mutated=", tostring(mutated)) 
+            end
+            
+            -- Flying text for mutation events (per-player setting)
+            if game and game.players then
+                local arrow = ""
+                local color = {r = 0.5, g = 0.5, b = 0.5} -- Gray for no change
+                
+                if new_q ~= cur then
+                    if dir > 0 then
+                        arrow = "↑"
+                        color = {r = 0.0, g = 1.0, b = 0.0} -- Green for improvement
+                    else
+                        arrow = "↓"
+                        color = {r = 1.0, g = 0.0, b = 0.0} -- Red for degradation
+                    end
+                else
+                    -- Clamped (tried to go beyond bounds)
+                    if dir > 0 then
+                        arrow = "↑≡" -- Up but clamped
+                    else
+                        arrow = "↓≡" -- Down but clamped
+                    end
+                end
+                
+                local text = {"agricultural-roboport.mutation-flying-text", 
+                    arrow, 
+                    string.format("%.2f", chance * 100), 
+                    string.format("%.0f", adjusted_improvement_chance * 100)}
+                
+                -- Create flying text for players who have visualization enabled
+                for _, player in pairs(game.players) do
+                    if player and player.valid then
+                        local show_visualization = false
+                        if player.mod_settings and player.mod_settings["agricultural-roboport-mutation-visualization"] then
+                            show_visualization = player.mod_settings["agricultural-roboport-mutation-visualization"].value
+                        end
+                        
+                        if show_visualization then
+                            player.create_local_flying_text{
+                                text = text,
+                                position = plant.position,
+								surface = plant.surface,
+                                create_at_cursor = false,
+                                color = color,
+                                time_to_live = 180, -- 3 seconds
+                                speed = 0.5
+                            }
+                        end
+                    end
+                end
+            end
         end
     end
 
@@ -1101,15 +1269,24 @@ local function on_entity_removed_dispatch(event)
     -- If a plant was removed/mined, attempt to apply stored quality to the harvest buffer
     if event and event.entity and event.entity.valid and event.entity.type == "plant" then
         local inv_buffer = event.buffer
+        local harvester_force = nil
+        
+        -- Try to determine who is harvesting to get their force
+        if event.player_index then
+            harvester_force = game.players[event.player_index].force
+        elseif event.robot and event.robot.valid then
+            harvester_force = event.robot.force
+        end
+        
 		if write_file_log then
-			write_file_log("[QUALITY] on_entity_removed_dispatch: entity=", event.entity.name, " buffer=", tostring(inv_buffer ~= nil), "robot=", tostring(event.robot ~= nil))
+			write_file_log("[QUALITY] on_entity_removed_dispatch: entity=", event.entity.name, " buffer=", tostring(inv_buffer ~= nil), "robot=", tostring(event.robot ~= nil), "player_index=", tostring(event.player_index), "harvester_force=", harvester_force and harvester_force.name or "nil")
 		end
         -- Robots may not provide `event.buffer`; if a robot did the mining, use its cargo inventory
         if (not inv_buffer) and event.robot and event.robot.valid then
             local ok, inv = pcall(function() return event.robot.get_inventory(defines.inventory.robot_cargo) end)
             if ok then inv_buffer = inv end
         end
-        pcall(function() harvest_plant(event.entity, inv_buffer) end)
+        pcall(function() harvest_plant(event.entity, inv_buffer, harvester_force) end)
     end
 end
 
@@ -1144,7 +1321,20 @@ event_subscriptions.register_all({
         end,
         on_tower_mined_plant = function(event)
             if event and event.plant then
-                pcall(function() harvest_plant(event.plant, event.buffer) end)
+                -- For agricultural towers, the tower's force is the harvester force
+                local harvester_force = nil
+                if event.tower and event.tower.valid then
+                    harvester_force = event.tower.force
+                elseif event.robot and event.robot.valid then
+                    harvester_force = event.robot.force
+                end
+                if write_file_log then
+                    write_file_log("[QUALITY] on_tower_mined_plant: plant=", event.plant.name, 
+                        "has_tower=", tostring(event.tower ~= nil),
+                        "has_robot=", tostring(event.robot ~= nil),
+                        "harvester_force=", harvester_force and harvester_force.name or "nil")
+                end
+                pcall(function() harvest_plant(event.plant, event.buffer, harvester_force) end)
             end
         end
     },
