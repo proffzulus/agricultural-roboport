@@ -25,24 +25,64 @@ function write_file_log(...)
 end
 
 -- Quality order and helpers
-local QUALITY_BY_LEVEL = {
-	[0] = "normal",
-	[1] = "uncommon",
-	[2] = "rare",
-	[3] = "epic",
-	[4] = "legendary"
-}
-local QUALITY_LEVEL = {}
-local MAX_QUALITY_LEVEL = 0
-for lvl, name in pairs(QUALITY_BY_LEVEL) do
-	QUALITY_LEVEL[name] = lvl
-	if lvl > MAX_QUALITY_LEVEL then MAX_QUALITY_LEVEL = lvl end
+-- Quality system tables (built dynamically at runtime from prototypes.quality)
+-- Stored in storage state to support mods that modify quality tiers
+local function build_quality_tables()
+    if not is_quality_enabled() then
+        -- Quality disabled - set empty tables
+        storage.quality_by_level = {}
+        storage.quality_level = {}
+        storage.max_quality_level = 0
+        storage.quality_tables_version = 2  -- Track table format version
+        log("Agricultural Roboport: Quality disabled - skipping quality table initialization")
+        return
+    end
+    
+    if not prototypes or not prototypes.quality then
+        log("Agricultural Roboport: Warning - prototypes.quality not available, cannot build quality tables")
+        return
+    end
+    
+    -- Build sorted list of qualities
+    local qualities = {}
+    for name, quality_proto in pairs(prototypes.quality) do
+        table.insert(qualities, {
+            name = name,
+            level = quality_proto.level
+        })
+    end
+    
+    -- Sort by level
+    table.sort(qualities, function(a, b) return a.level < b.level end)
+    
+    -- Build lookup tables using sequential tier indices (0, 1, 2, ...)
+    -- instead of prototype.level which can be skipped by mods for stat bonuses
+    storage.quality_by_level = {}
+    storage.quality_level = {}
+    storage.max_quality_level = 0
+    
+    for tier_index, quality in ipairs(qualities) do
+        local tier = tier_index - 1  -- 0-based tier index
+        storage.quality_by_level[tier] = quality.name
+        storage.quality_level[quality.name] = tier
+        storage.max_quality_level = tier
+    end
+    
+    storage.quality_tables_version = 2  -- Mark as using tier-based format
+    
+    log("Agricultural Roboport: Built quality tables with " .. #qualities .. " tiers (max tier: " .. storage.max_quality_level .. ")")
 end
 
 local function adjacent_quality_name(current_name, dir)
-	local idx = QUALITY_LEVEL[current_name] or 0
-	local new_idx = util.clamp(idx + dir, 0, MAX_QUALITY_LEVEL)
-	return QUALITY_BY_LEVEL[new_idx]
+    if not storage.quality_level or not storage.quality_by_level or not storage.max_quality_level then
+        -- Fallback if tables not initialized yet
+        log("Agricultural Roboport: Warning - quality tables not initialized, returning current quality")
+        return current_name
+    end
+    
+    local idx = storage.quality_level[current_name] or 0
+    local new_idx = util.clamp(idx + dir, 0, storage.max_quality_level)
+    return storage.quality_by_level[new_idx] or current_name
 end
 
 -- Runtime-only sprite table (not persisted to storage)
@@ -156,6 +196,8 @@ script.on_init(function()
     storage._tdm = { version = 0, snapshot_version = 0, keys = {}, next_index = 1, registered_interval = nil }
     -- Ensure quality plants storage exists for new games
     storage.quality_plants = storage.quality_plants or {}
+    -- Build dynamic quality tables from prototypes
+    build_quality_tables()
     -- Make process function globally accessible
     _G.process_agricultural_roboport = process_agricultural_roboport
     -- Re-read TDM settings at runtime and register the handler now that `game` is available
@@ -191,6 +233,14 @@ end)
 local function handle_deferred_rebuild()
     if not rebuild_on_next_tick then return end
     rebuild_on_next_tick = false
+    
+    -- Check if quality tables need migration (old version used prototype.level instead of tier index)
+    -- Version 1: used prototype.level (can be skipped by mods)
+    -- Version 2: uses sequential tier index (0, 1, 2, ...)
+    if not storage.quality_tables_version or storage.quality_tables_version < 2 then
+        if write_file_log then write_file_log("=== QUALITY TABLE MIGRATION: Rebuilding quality tables (old version detected) ===") end
+        build_quality_tables()
+    end
     
     -- Always rebuild virtual_seed_info on load (deferred from on_load to avoid mutating storage during on_load)
         if Build_virtual_seed_info then
@@ -433,8 +483,13 @@ local function harvest_plant(plant, inv_buffer, harvester_force)
         end
     end
 
-    -- Get controlled mutation research level (0-5)
+    -- Get controlled mutation research level (dynamic based on available techs)
     local function get_controlled_mutation_level(force)
+        -- Early exit if quality is disabled
+        if not is_quality_enabled() then
+            return 0
+        end
+        
         -- Handle neutral/nil force (return 0 = no research bonus)
         if not force or not force.technologies then
             if write_file_log then write_file_log("[QUALITY] get_controlled_mutation_level: force or technologies is nil") end
@@ -443,17 +498,45 @@ local function harvest_plant(plant, inv_buffer, harvester_force)
         
         if write_file_log then write_file_log("[QUALITY] Checking research level for force:", force.name) end
         
-        for level = 8, 1, -1 do
-            local tech_name = "agricultural-controlled-mutations-" .. tostring(level)
-            local tech = force.technologies[tech_name]
-            if write_file_log then 
-                write_file_log("[QUALITY] Checking tech:", tech_name, "exists=", tostring(tech ~= nil), "researched=", tech and tostring(tech.researched) or "N/A") 
-            end
-            if tech and tech.researched then
-                if write_file_log then write_file_log("[QUALITY] Found research level:", level) end
-                return level
+        -- Find all controlled mutations technologies using API
+        -- Scan technology prototypes to find matching pattern and extract levels
+        local max_level = 0
+        local tech_levels = {}
+        
+        if prototypes and prototypes.technology then
+            for tech_name, tech_proto in pairs(prototypes.technology) do
+                local level_str = tech_name:match("^agricultural%-controlled%-mutations%-(%d+)$")
+                if level_str then
+                    local level = tonumber(level_str)
+                    if level then
+                        tech_levels[level] = tech_name
+                        if level > max_level then
+                            max_level = level
+                        end
+                    end
+                end
             end
         end
+        
+        if max_level == 0 then
+            if write_file_log then write_file_log("[QUALITY] No controlled mutation technologies found in prototypes") end
+            return 0
+        end
+        
+        if write_file_log then write_file_log("[QUALITY] Found", max_level, "controlled mutation tech levels") end
+        
+        -- Search backwards from highest discovered level to find highest researched
+        for level = max_level, 1, -1 do
+            local tech_name = tech_levels[level]
+            if tech_name then
+                local tech = force.technologies[tech_name]
+                if tech and tech.researched then
+                    if write_file_log then write_file_log("[QUALITY] Found research level:", level) end
+                    return level
+                end
+            end
+        end
+        
         if write_file_log then write_file_log("[QUALITY] No controlled mutation research found, returning 0") end
         return 0
     end
@@ -548,23 +631,21 @@ local function harvest_plant(plant, inv_buffer, harvester_force)
         if write_file_log then write_file_log("[QUALITY] Proc roll (math.random): chance=", chance, "sample=", sample, "current=", qname) end
         if sample < chance then
             local dir_sample = math.random()
-            -- Extract level from final_quality (handle userdata/table)
-            local quality_level = 0
-            if type(final_quality) == "table" or type(final_quality) == "userdata" then
-                quality_level = final_quality.level or 0
-            end
+            -- Use sequential quality tier index instead of potentially-skipped level number
+            -- (Some mods like ic-more-qualities skip levels to inflate stat bonuses)
+            local quality_tier = storage.quality_level[qname] or 0
             
             -- Get controlled mutation research level and calculate improvement chance
             local research_level = get_controlled_mutation_level(force_to_use)
             local base_improvement_chance = research_level * 0.20  -- 0%, 20%, 40%, 60%, 80%, 100%
             -- Pollution reduces improvement chance (high pollution = more chaotic mutations)
-            local adjusted_improvement_chance = base_improvement_chance - (quality_level * 0.20) - pollution_bonus
+            local adjusted_improvement_chance = base_improvement_chance - (quality_tier * 0.20) - pollution_bonus
             
             if write_file_log then 
                 write_file_log("[QUALITY] Improvement calculation:", 
                     "research_level=", research_level,
                     "base_improvement=", base_improvement_chance,
-                    "quality_level=", quality_level,
+                    "quality_tier=", quality_tier,
                     "pollution_bonus=", pollution_bonus,
                     "adjusted_improvement=", adjusted_improvement_chance,
                     "dir_sample=", dir_sample)
@@ -1352,5 +1433,7 @@ script.on_configuration_changed(function()
     else
         write_file_log("[ERROR] Build_virtual_seed_info function not available")
     end
+    -- Rebuild quality tables to account for mods that add/remove quality tiers
+    build_quality_tables()
 end)
 

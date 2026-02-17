@@ -1,5 +1,23 @@
 
 ---------------------------------------------------------------------------------------------------
+Version: 1.3.9
+Date: 2026-02-17
+  Major Features:
+    - Dynamic tech tree generation based on detected quality tiers (supports mods with custom quality systems)
+    - Science pack requirements now properly inherit from quality unlock technologies and previous mutation levels
+    - Added phantom recipe to display mutation improvement bonus in technology effects and bonuses tab
+  Improvements:
+    - Controlled Mutations technology now shows visible +20% productivity bonus per level in tech screen
+    - Tech tree adapts to any number of quality tiers (tested with ic-more-qualities: 40 tiers)
+  Bugfixes:
+    - Fixed quality tier calculation for mods that skip prototype levels (e.g., ic-more-qualities)
+    - Fixed mutation improvement chance calculation using sequential tiers instead of inflated prototype levels
+    - Added automatic migration for saves using old quality table format
+  Changes:
+    - Quality tables now use sequential tier indices (0, 1, 2...) independent of prototype level assignments
+    - Extreme quality (tier 40) now correctly shows 60% improvement chance at max research instead of -180%
+
+---------------------------------------------------------------------------------------------------
 Version: 1.3.8
 Date: 2026-02-13
   Major Features:
