@@ -44,12 +44,16 @@ local function build_quality_tables()
     end
     
     -- Build sorted list of qualities
+    -- Exclude any quality with "unknown" in the name (Factorio internal, not for gameplay)
     local qualities = {}
     for name, quality_proto in pairs(prototypes.quality) do
-        table.insert(qualities, {
-            name = name,
-            level = quality_proto.level
-        })
+        -- Skip any quality containing "unknown" (matches "unknown", "quality-unknown", etc.)
+        if not name:match("unknown") then
+            table.insert(qualities, {
+                name = name,
+                level = quality_proto.level
+            })
+        end
     end
     
     -- Sort by level

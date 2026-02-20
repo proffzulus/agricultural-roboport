@@ -1,5 +1,16 @@
 
 ---------------------------------------------------------------------------------------------------
+Version: 1.4.0
+Date: 2026-02-20
+  Bugfixes:
+    - Fixed critical bug where normal quality plants would mutate to "unknown" quality instead of uncommon
+    - Fixed controlled mutations improvement chances being shifted by one tier down
+    - Fixed quality tables including internal "quality-unknown" prototype (now excludes any quality with "unknown" in name)
+    - Fixed maximum achievable quality being one tier lower than intended due to "unknown" contamination
+  Changes:
+    - Quality filtering now uses pattern matching to exclude any "unknown" variants from mutation system
+
+---------------------------------------------------------------------------------------------------
 Version: 1.3.9
 Date: 2026-02-17
   Major Features:

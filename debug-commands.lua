@@ -387,3 +387,116 @@ commands.add_command("agro-seed-info", "Show detailed plant info for the seed it
         write_file_log("=== END SEED INFO ===")
     end
 end)
+commands.add_command("agro-quality-table-dump", "Dump quality tables (storage.quality_by_level, quality_level, etc.)", function(event)
+    local player = game.get_player(event.player_index)
+    if not player then return end
+    
+    player.print("=== QUALITY TABLE DUMP ===")
+    
+    -- Basic info
+    if not storage then
+        player.print("[color=red]storage is nil![/color]")
+        if write_file_log then write_file_log("[QUALITY DUMP] storage is nil!") end
+        return
+    end
+    
+    player.print("storage.quality_tables_version: " .. tostring(storage.quality_tables_version or "nil"))
+    player.print("storage.max_quality_level: " .. tostring(storage.max_quality_level or "nil"))
+    
+    if write_file_log then
+        write_file_log("=== QUALITY TABLE DUMP ===")
+        write_file_log("storage.quality_tables_version:", tostring(storage.quality_tables_version or "nil"))
+        write_file_log("storage.max_quality_level:", tostring(storage.max_quality_level or "nil"))
+    end
+    
+    -- Dump quality_by_level table (tier -> name)
+    player.print("\n=== storage.quality_by_level (tier -> name) ===")
+    if write_file_log then write_file_log("\n=== storage.quality_by_level (tier -> name) ===") end
+    
+    if not storage.quality_by_level then
+        player.print("[color=yellow]quality_by_level is nil![/color]")
+        if write_file_log then write_file_log("quality_by_level is nil!") end
+    else
+        -- Count entries
+        local count = 0
+        for _ in pairs(storage.quality_by_level) do count = count + 1 end
+        player.print("Entries: " .. count)
+        if write_file_log then write_file_log("Entries:", count) end
+        
+        -- Sort keys numerically
+        local keys = {}
+        for k in pairs(storage.quality_by_level) do
+            table.insert(keys, k)
+        end
+        table.sort(keys, function(a, b) return tonumber(a) < tonumber(b) end)
+        
+        -- Display all entries
+        for _, tier in ipairs(keys) do
+            local name = storage.quality_by_level[tier]
+            local line = string.format("  [%s] -> %s", tostring(tier), tostring(name))
+            player.print(line)
+            if write_file_log then write_file_log(line) end
+        end
+    end
+    
+    -- Dump quality_level table (name -> tier)
+    player.print("\n=== storage.quality_level (name -> tier) ===")
+    if write_file_log then write_file_log("\n=== storage.quality_level (name -> tier) ===") end
+    
+    if not storage.quality_level then
+        player.print("[color=yellow]quality_level is nil![/color]")
+        if write_file_log then write_file_log("quality_level is nil!") end
+    else
+        -- Count entries
+        local count = 0
+        for _ in pairs(storage.quality_level) do count = count + 1 end
+        player.print("Entries: " .. count)
+        if write_file_log then write_file_log("Entries:", count) end
+        
+        -- Sort keys alphabetically
+        local keys = {}
+        for k in pairs(storage.quality_level) do
+            table.insert(keys, k)
+        end
+        table.sort(keys)
+        
+        -- Display all entries
+        for _, name in ipairs(keys) do
+            local tier = storage.quality_level[name]
+            local line = string.format("  '%s' -> %s", name, tostring(tier))
+            player.print(line)
+            if write_file_log then write_file_log(line) end
+        end
+    end
+    
+    -- Check prototypes.quality for comparison
+    player.print("\n=== prototypes.quality (for comparison) ===")
+    if write_file_log then write_file_log("\n=== prototypes.quality (for comparison) ===") end
+    
+    if prototypes and prototypes.quality then
+        -- Build sorted list
+        local qualities = {}
+        for name, quality_proto in pairs(prototypes.quality) do
+            table.insert(qualities, {
+                name = name,
+                level = quality_proto.level
+            })
+        end
+        table.sort(qualities, function(a, b) return a.level < b.level end)
+        
+        player.print("Total quality prototypes: " .. #qualities)
+        if write_file_log then write_file_log("Total quality prototypes:", #qualities) end
+        
+        for i, q in ipairs(qualities) do
+            local line = string.format("  [%d] level=%s name='%s'", i-1, tostring(q.level), q.name)
+            player.print(line)
+            if write_file_log then write_file_log(line) end
+        end
+    else
+        player.print("[color=red]prototypes.quality not available![/color]")
+        if write_file_log then write_file_log("prototypes.quality not available!") end
+    end
+    
+    player.print("\n=== END QUALITY TABLE DUMP ===")
+    if write_file_log then write_file_log("=== END QUALITY TABLE DUMP ===") end
+end)
