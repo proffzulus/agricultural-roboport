@@ -1,5 +1,11 @@
 
 ---------------------------------------------------------------------------------------------------
+Version: 1.4.1
+Date: 2026-02-23
+  Bugfixes:
+    - Fixed duplicate locale keys in non-English translations preventing mod from loading (agricultural-roboport-dense-seeding was duplicated in German, Spanish, French, Japanese, Russian, and Chinese locales)
+
+---------------------------------------------------------------------------------------------------
 Version: 1.4.0
 Date: 2026-02-20
   Bugfixes:
