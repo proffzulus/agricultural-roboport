@@ -234,145 +234,76 @@ script.on_load(function()
 end)
 
 -- Handle deferred rebuild from on_load (called by main on_tick handler)
+-- CRITICAL: This function runs during gameplay (after client joins in multiplayer)
+-- It must NOT modify storage - only recreate client-side rendering (sprites)
+-- All storage modifications must be in on_init() or on_configuration_changed()
 local function handle_deferred_rebuild()
     if not rebuild_on_next_tick then return end
     rebuild_on_next_tick = false
     
-    -- Check if quality tables need migration (old version used prototype.level instead of tier index)
-    -- Version 1: used prototype.level (can be skipped by mods)
-    -- Version 2: uses sequential tier index (0, 1, 2, ...)
-    if not storage.quality_tables_version or storage.quality_tables_version < 2 then
-        if write_file_log then write_file_log("=== QUALITY TABLE MIGRATION: Rebuilding quality tables (old version detected) ===") end
-        build_quality_tables()
+    -- Skip quality sprite recreation if quality tables weren't initialized
+    -- NOTE: Don't check is_quality_enabled() here - startup settings are local to each client!
+    -- In multiplayer, each client may have different startup settings, causing desync.
+    -- Instead, check if quality tables exist in storage (only created if enabled on server)
+    if not storage.quality_plants then return end
+    if not storage.quality_level then return end  -- Quality was disabled, tables not built
+    
+    if write_file_log then write_file_log("[QUALITY] on_load: Recreating sprites for", table_size(storage.quality_plants), "quality plants") end
+    
+    for key, data in pairs(storage.quality_plants) do
+        if data and data.quality then
+            -- Parse hash format (surface:x.xx,y.yy)
+            local surface_name, fx, fy = key:match("^([^:]+):([%d%.%-]+),([%d%.%-]+)$")
+            
+            if not surface_name then
+                -- Skip invalid keys (old format should have been migrated by on_configuration_changed)
+                if write_file_log then write_file_log("[QUALITY] on_load: Skipping invalid key format:", key) end
+                goto continue_end
+            end
+            
+            local surface = game and game.surfaces and game.surfaces[surface_name]
+            if not surface then goto continue_end end
+            
+            local x_search = tonumber(fx)
+            local y_search = tonumber(fy)
+            local area = {{x_search - 0.5, y_search - 0.5}, {x_search + 0.5, y_search + 0.5}}
+            
+            local ents = surface.find_entities_filtered{ area = area, type = "plant" }
+            local plant = ents and ents[1]
+            
+            if plant and plant.valid then
+                local qname = nil
+                if type(data.quality) == "table" or type(data.quality) == "userdata" then 
+                    qname = data.quality.name 
+                elseif type(data.quality) == "string" then 
+                    qname = data.quality 
+                end
+                
+                if qname and qname ~= "normal" then
+                    local ok, sprite_id = pcall(function()
+                        return rendering.draw_sprite{
+                            sprite = "quality." .. qname,
+                            target = plant,
+                            surface = surface,
+                            target_offset = {0.0, 0.0},
+                            x_scale = 0.5,
+                            y_scale = 0.5,
+                            render_layer = "light-effect",
+                            only_in_alt_mode = true
+                        }
+                    end)
+                    
+                    if ok and sprite_id then 
+                        quality_plant_sprites[key] = sprite_id
+                        if write_file_log then write_file_log("[QUALITY] on_load: Recreated sprite for key=", key, "sprite=", sprite_id) end
+                    end
+                end
+            end
+            ::continue_end::
+        end
     end
     
-    -- Always rebuild virtual_seed_info on load (deferred from on_load to avoid mutating storage during on_load)
-        if Build_virtual_seed_info then
-            write_file_log("=== on_load deferred rebuild: Rebuilding virtual_seed_info ===")
-            storage.virtual_seed_info = Build_virtual_seed_info()
-            write_file_log("=== virtual_seed_info rebuilt with", table_size(storage.virtual_seed_info or {}), "entries ===")
-        end
-        
-        -- Skip quality sprite recreation if disabled
-        if not is_quality_enabled() then return end
-        
-        -- Recreate sprites from persistent quality_plants storage
-        -- Sprites use only_in_alt_mode flag, so they automatically show/hide
-        if not storage.quality_plants then return end
-        
-        if write_file_log then write_file_log("[QUALITY] on_load: Recreating sprites for", table_size(storage.quality_plants), "quality plants") end
-        
-        local old_keys_to_migrate = {}
-        
-        for key, data in pairs(storage.quality_plants) do
-            if data and data.quality then
-                -- Try to parse new hash format first (surface:x.xx,y.yy)
-                local surface_name, fx, fy = key:match("^([^:]+):([%d%.%-]+),([%d%.%-]+)$")
-                local is_old_format = false
-                
-                -- If that fails, try old format (surface:int,int where coordinates were floor(x/2))
-                if not surface_name then
-                    surface_name, fx, fy = key:match("^([^:]+):(-?%d+),(-?%d+)$")
-                    if surface_name then
-                        is_old_format = true
-                        if write_file_log then write_file_log("[QUALITY] on_load: Found old hash format key=", key) end
-                    else
-                        goto continue_end
-                    end
-                end
-                
-                local surface = game and game.surfaces and game.surfaces[surface_name]
-                if not surface then goto continue_end end
-                
-                local x_search, y_search, area
-                if is_old_format then
-                    -- Old format: hash was floor(x/2), so actual coordinates span 2x2 tile area
-                    local x_min = tonumber(fx) * 2
-                    local y_min = tonumber(fy) * 2
-                    area = {{x_min - 0.5, y_min - 0.5}, {x_min + 2.5, y_min + 2.5}}
-                else
-                    -- New format: exact coordinates
-                    x_search = tonumber(fx)
-                    y_search = tonumber(fy)
-                    area = {{x_search - 0.5, y_search - 0.5}, {x_search + 0.5, y_search + 0.5}}
-                end
-                
-                local ents = surface.find_entities_filtered{ area = area, type = "plant" }
-                local plant = ents and ents[1]
-                
-                if plant and plant.valid then
-                    local qname = nil
-                    if type(data.quality) == "table" or type(data.quality) == "userdata" then 
-                        qname = data.quality.name 
-                    elseif type(data.quality) == "string" then 
-                        qname = data.quality 
-                    end
-                    
-                    if qname and qname ~= "normal" then
-                        local ok, sprite_id = pcall(function()
-                            return rendering.draw_sprite{
-                                sprite = "quality." .. qname,
-                                target = plant,
-                                surface = surface,
-                                target_offset = {0.0, 0.0},
-                                x_scale = 0.5,
-                                y_scale = 0.5,
-                                render_layer = "light-effect",
-                                only_in_alt_mode = true
-                            }
-                        end)
-                        
-                        if ok and sprite_id then 
-                            quality_plant_sprites[key] = sprite_id
-                            if write_file_log then write_file_log("[QUALITY] on_load: Recreated sprite for key=", key, "sprite=", sprite_id) end
-                        end
-                        
-                        -- If this was old format, schedule migration to new format
-                        if is_old_format then
-                            table.insert(old_keys_to_migrate, {
-                                old_key = key,
-                                plant = plant,
-                                quality = data.quality
-                            })
-                        end
-                    end
-                end
-                ::continue_end::
-            end
-        end
-        
-        -- Migrate old format keys to new format (backward compatibility)
-        if #old_keys_to_migrate > 0 then
-            if write_file_log then write_file_log("[QUALITY] on_load: Migrating", #old_keys_to_migrate, "old format keys to new format") end
-            
-            for _, entry in ipairs(old_keys_to_migrate) do
-                -- Remove old key
-                storage.quality_plants[entry.old_key] = nil
-                
-                -- Remove old sprite from runtime table
-                local old_sprite_id = quality_plant_sprites[entry.old_key]
-                if old_sprite_id then
-                    quality_plant_sprites[entry.old_key] = nil
-                end
-                
-                -- Re-register with new hash format (exact coordinates)
-                local new_key = hash_string(entry.plant.position.x, entry.plant.position.y, entry.plant.surface.name)
-                storage.quality_plants[new_key] = { quality = entry.quality }
-                
-                -- Sprite already created above, just update runtime table key
-                if old_sprite_id then
-                    quality_plant_sprites[new_key] = old_sprite_id
-                end
-                
-                if write_file_log then 
-                    write_file_log("[QUALITY] Migrated:", entry.old_key, "->", new_key) 
-                end
-            end
-            
-            if write_file_log then write_file_log("[QUALITY] on_load: Migration complete") end
-        end
-        
-        if write_file_log then write_file_log("[QUALITY] on_load: Sprite recreation complete, total sprites=", table_size(quality_plant_sprites)) end
+    if write_file_log then write_file_log("[QUALITY] on_load: Sprite recreation complete, total sprites=", table_size(quality_plant_sprites)) end
 end
 
 -- =====================
@@ -387,8 +318,9 @@ local function hash_string(x, y, surface_name)
 end
 
 local function register_plant(plant, quality)
-    -- Skip quality tracking if disabled
-    if not is_quality_enabled() then return end
+    -- Skip quality tracking if quality tables weren't initialized
+    -- NOTE: Check storage, not is_quality_enabled() to avoid startup setting mismatch in multiplayer
+    if not storage.quality_level then return end
     
     storage.quality_plants = storage.quality_plants or {}
 
@@ -446,8 +378,9 @@ local function register_plant(plant, quality)
 end
 
 local function harvest_plant(plant, inv_buffer, harvester_force)
-    -- Skip quality tracking if disabled
-    if not is_quality_enabled() then 
+    -- Skip quality tracking if quality tables weren't initialized
+    -- NOTE: Check storage, not is_quality_enabled() to avoid startup setting mismatch in multiplayer
+    if not storage.quality_level then 
         if write_file_log then write_file_log("[QUALITY] harvest_plant: quality disabled, skipping") end
         return 
     end
@@ -489,8 +422,9 @@ local function harvest_plant(plant, inv_buffer, harvester_force)
 
     -- Get controlled mutation research level (dynamic based on available techs)
     local function get_controlled_mutation_level(force)
-        -- Early exit if quality is disabled
-        if not is_quality_enabled() then
+        -- Early exit if quality tables weren't initialized
+        -- NOTE: Check storage, not is_quality_enabled() to avoid startup setting mismatch in multiplayer
+        if not storage.quality_level then
             return 0
         end
         
@@ -1425,6 +1359,10 @@ event_subscriptions.register_all({
 })
 
 script.on_configuration_changed(function()
+    -- Rebuild quality tables to account for mods that add/remove quality tiers
+    -- Also handles migration from old quality_tables_version < 2
+    build_quality_tables()
+    
     -- Always rebuild virtual_seed_info on configuration change to pick up new seeds or mod changes
     write_file_log("=== on_configuration_changed() CALLED ===", "Rebuilding virtual_seed_info")
     if Build_virtual_seed_info then
@@ -1433,7 +1371,67 @@ script.on_configuration_changed(function()
     else
         write_file_log("[ERROR] Build_virtual_seed_info function not available")
     end
-    -- Rebuild quality tables to account for mods that add/remove quality tiers
-    build_quality_tables()
+    
+    -- Migrate old hash format quality_plants keys to new format (if any exist)
+    -- Old format: "surface:int,int" where coordinates were floor(x/2)
+    -- New format: "surface:x.xx,y.yy" with exact coordinates
+    if storage.quality_plants then
+        local old_keys_to_migrate = {}
+        
+        for key, data in pairs(storage.quality_plants) do
+            if data and data.quality then
+                -- Try to parse new hash format first (surface:x.xx,y.yy)
+                local surface_name, fx, fy = key:match("^([^:]+):([%d%.%-]+),([%d%.%-]+)$")
+                
+                -- If that fails, try old format (surface:int,int where coordinates were floor(x/2))
+                if not surface_name then
+                    surface_name, fx, fy = key:match("^([^:]+):(-?%d+),(-?%d+)$")
+                    if surface_name then
+                        -- This is old format - need to find the actual plant
+                        if write_file_log then write_file_log("[QUALITY] Migration: Found old hash format key=", key) end
+                        
+                        local surface = game and game.surfaces and game.surfaces[surface_name]
+                        if surface then
+                            -- Old format: hash was floor(x/2), so actual coordinates span 2x2 tile area
+                            local x_min = tonumber(fx) * 2
+                            local y_min = tonumber(fy) * 2
+                            local area = {{x_min - 0.5, y_min - 0.5}, {x_min + 2.5, y_min + 2.5}}
+                            
+                            local ents = surface.find_entities_filtered{ area = area, type = "plant" }
+                            local plant = ents and ents[1]
+                            
+                            if plant and plant.valid then
+                                table.insert(old_keys_to_migrate, {
+                                    old_key = key,
+                                    plant = plant,
+                                    quality = data.quality
+                                })
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- Perform migration
+        if #old_keys_to_migrate > 0 then
+            if write_file_log then write_file_log("[QUALITY] Migration: Converting", #old_keys_to_migrate, "old format keys to new format") end
+            
+            for _, entry in ipairs(old_keys_to_migrate) do
+                -- Remove old key
+                storage.quality_plants[entry.old_key] = nil
+                
+                -- Re-register with new hash format (exact coordinates)
+                local new_key = hash_string(entry.plant.position.x, entry.plant.position.y, entry.plant.surface.name)
+                storage.quality_plants[new_key] = { quality = entry.quality }
+                
+                if write_file_log then 
+                    write_file_log("[QUALITY] Migrated:", entry.old_key, "->", new_key) 
+                end
+            end
+            
+            if write_file_log then write_file_log("[QUALITY] Migration: Complete") end
+        end
+    end
 end)
 

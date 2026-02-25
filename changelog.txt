@@ -1,5 +1,25 @@
 
 ---------------------------------------------------------------------------------------------------
+Version: 1.4.4
+Date: 2026-02-25
+  Bugfixes:
+    - Fixed multiplayer desync caused by checking local startup settings instead of synchronized storage during runtime
+  Technical:
+    - Changed all runtime quality checks from is_quality_enabled() to storage.quality_level existence checks
+    - Prevents desync when server and clients have different agricultural-roboport-enable-quality startup settings
+    - Quality behavior now determined by server's startup setting (stored in synchronized storage), not each client's local setting
+
+---------------------------------------------------------------------------------------------------
+Version: 1.4.3
+Date: 2026-02-25
+  Bugfixes:
+    - Fixed multiplayer desync when clients join servers with quality enabled (deferred rebuild was modifying storage during runtime instead of only in on_configuration_changed)
+  Technical:
+    - Moved quality table migration and virtual_seed_info rebuild to on_configuration_changed() only
+    - handle_deferred_rebuild() now only recreates client-side rendering (sprites) without modifying game state
+    - Hash format migration moved to proper lifecycle event
+
+---------------------------------------------------------------------------------------------------
 Version: 1.4.2
 Date: 2026-02-25
   Bugfixes:
