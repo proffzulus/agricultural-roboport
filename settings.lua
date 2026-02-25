@@ -34,7 +34,7 @@ local agricultural_roboport_settings = {
   {
     type = "bool-setting",
     name = "agricultural-roboport-mutation-visualization",
-    setting_type = "runtime-per-user",
+    setting_type = "runtime-global",
     default_value = true,
     order = "b-2"
   }

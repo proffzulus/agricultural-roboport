@@ -1,5 +1,14 @@
 
 ---------------------------------------------------------------------------------------------------
+Version: 1.4.2
+Date: 2026-02-25
+  Bugfixes:
+    - Fixed multiplayer desync issue when quality feature is enabled (caused by per-player setting access during deterministic game simulation)
+  Changes:
+    - Mutation visualization setting changed from per-player to global (server controlled)
+    - Added Ukrainian (uk) localization
+
+---------------------------------------------------------------------------------------------------
 Version: 1.4.1
 Date: 2026-02-23
   Bugfixes:

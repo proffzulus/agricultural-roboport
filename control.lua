@@ -701,19 +701,15 @@ local function harvest_plant(plant, inv_buffer, harvester_force)
                     string.format("%.2f", chance * 100), 
                     string.format("%.0f", adjusted_improvement_chance * 100)}
                 
-                -- Create flying text for players who have visualization enabled
-                for _, player in pairs(game.players) do
-                    if player and player.valid then
-                        local show_visualization = false
-                        if player.mod_settings and player.mod_settings["agricultural-roboport-mutation-visualization"] then
-                            show_visualization = player.mod_settings["agricultural-roboport-mutation-visualization"].value
-                        end
-                        
-                        if show_visualization then
+                -- Create flying text if visualization is enabled (global setting)
+                local show_visualization = settings.global["agricultural-roboport-mutation-visualization"].value
+                if show_visualization then
+                    for _, player in pairs(game.players) do
+                        if player and player.valid then
                             player.create_local_flying_text{
                                 text = text,
                                 position = plant.position,
-								surface = plant.surface,
+                                surface = plant.surface,
                                 create_at_cursor = false,
                                 color = color,
                                 time_to_live = 180, -- 3 seconds
