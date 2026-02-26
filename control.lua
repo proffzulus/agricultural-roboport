@@ -241,69 +241,15 @@ local function handle_deferred_rebuild()
     if not rebuild_on_next_tick then return end
     rebuild_on_next_tick = false
     
-    -- Skip quality sprite recreation if quality tables weren't initialized
-    -- NOTE: Don't check is_quality_enabled() here - startup settings are local to each client!
-    -- In multiplayer, each client may have different startup settings, causing desync.
-    -- Instead, check if quality tables exist in storage (only created if enabled on server)
-    if not storage.quality_plants then return end
-    if not storage.quality_level then return end  -- Quality was disabled, tables not built
+    -- MULTIPLAYER FIX: Do NOT recreate sprites here!
+    -- Even though rendering API is "client-side", calling it during a deferred tick
+    -- (which runs during gameplay) can cause desync in multiplayer.
+    -- Instead, sprites will be recreated lazily when plants are next registered/harvested.
     
-    if write_file_log then write_file_log("[QUALITY] on_load: Recreating sprites for", table_size(storage.quality_plants), "quality plants") end
+    -- Clear the sprite table so sprites will be recreated on demand
+    quality_plant_sprites = {}
     
-    for key, data in pairs(storage.quality_plants) do
-        if data and data.quality then
-            -- Parse hash format (surface:x.xx,y.yy)
-            local surface_name, fx, fy = key:match("^([^:]+):([%d%.%-]+),([%d%.%-]+)$")
-            
-            if not surface_name then
-                -- Skip invalid keys (old format should have been migrated by on_configuration_changed)
-                if write_file_log then write_file_log("[QUALITY] on_load: Skipping invalid key format:", key) end
-                goto continue_end
-            end
-            
-            local surface = game and game.surfaces and game.surfaces[surface_name]
-            if not surface then goto continue_end end
-            
-            local x_search = tonumber(fx)
-            local y_search = tonumber(fy)
-            local area = {{x_search - 0.5, y_search - 0.5}, {x_search + 0.5, y_search + 0.5}}
-            
-            local ents = surface.find_entities_filtered{ area = area, type = "plant" }
-            local plant = ents and ents[1]
-            
-            if plant and plant.valid then
-                local qname = nil
-                if type(data.quality) == "table" or type(data.quality) == "userdata" then 
-                    qname = data.quality.name 
-                elseif type(data.quality) == "string" then 
-                    qname = data.quality 
-                end
-                
-                if qname and qname ~= "normal" then
-                    local ok, sprite_id = pcall(function()
-                        return rendering.draw_sprite{
-                            sprite = "quality." .. qname,
-                            target = plant,
-                            surface = surface,
-                            target_offset = {0.0, 0.0},
-                            x_scale = 0.5,
-                            y_scale = 0.5,
-                            render_layer = "light-effect",
-                            only_in_alt_mode = true
-                        }
-                    end)
-                    
-                    if ok and sprite_id then 
-                        quality_plant_sprites[key] = sprite_id
-                        if write_file_log then write_file_log("[QUALITY] on_load: Recreated sprite for key=", key, "sprite=", sprite_id) end
-                    end
-                end
-            end
-            ::continue_end::
-        end
-    end
-    
-    if write_file_log then write_file_log("[QUALITY] on_load: Sprite recreation complete, total sprites=", table_size(quality_plant_sprites)) end
+    if write_file_log then write_file_log("[QUALITY] on_load: Cleared sprite table, sprites will be recreated on demand") end
 end
 
 -- =====================

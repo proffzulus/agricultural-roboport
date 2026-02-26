@@ -1,5 +1,14 @@
 
 ---------------------------------------------------------------------------------------------------
+Version: 1.4.5
+Date: 2026-02-25
+  Bugfixes:
+    - Fixed multiplayer desync caused by sprite recreation during deferred rebuild after client joins
+  Changes:
+    - Sprites now recreate lazily on-demand instead of during on_load deferred tick
+    - This eliminates calling rendering API during gameplay ticks, preventing multiplayer desynchronization
+
+---------------------------------------------------------------------------------------------------
 Version: 1.4.4
 Date: 2026-02-25
   Bugfixes:
