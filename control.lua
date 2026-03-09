@@ -115,6 +115,7 @@ function create_default_roboport_settings()
     return {
         mode = 0, -- default to harvest and seed
         seed_logistic_only = false,
+        harvest_logistic_only = false,
         use_filter = false,
         filter_invert = false,
         filters = nil,
@@ -167,7 +168,17 @@ function Build_virtual_seed_info()
                             end
                         end
                         local ok3, tbr = pcall(function() return plant_proto.tile_buildability_rules end)
-                        if ok3 and tbr then tile_buildability_rules = tbr end
+                        -- Only store tile_buildability_rules if it has actual rules (not empty table)
+                        if ok3 and tbr then
+                            local has_rules = false
+                            for _ in pairs(tbr) do
+                                has_rules = true
+                                break
+                            end
+                            if has_rules then
+                                tile_buildability_rules = tbr
+                            end
+                        end
                     end
                     info[seed_name] = {
                         tile_restriction = restrictions,
@@ -781,7 +792,17 @@ local function on_built_virtual_seed_ghost(entity, event)
                 end
             end
             local ok3, tbr = pcall(function() return plant_proto.tile_buildability_rules end)
-            if ok3 and tbr then tile_buildability_rules = tbr end
+            -- Only store tile_buildability_rules if it has actual rules (not empty table)
+            if ok3 and tbr then
+                local has_rules = false
+                for _ in pairs(tbr) do
+                    has_rules = true
+                    break
+                end
+                if has_rules then
+                    tile_buildability_rules = tbr
+                end
+            end
         end
         local tile = surface.get_tile(position)
         local allowed = false
@@ -823,6 +844,7 @@ local function copy_roboport_settings(source_key, dest_key)
     local dest = {}
     dest.mode = src.mode or 0
     dest.seed_logistic_only = src.seed_logistic_only or false
+    dest.harvest_logistic_only = src.harvest_logistic_only or false
     dest.use_filter = src.use_filter or false
     dest.filter_invert = src.filter_invert or false
     dest.circuit_mode_enabled = src.circuit_mode_enabled or false
@@ -889,6 +911,7 @@ local function on_built_event_handler(event)
             local settings = create_default_roboport_settings()
             settings.mode = entity.tags.mode or 0
             settings.seed_logistic_only = entity.tags.seed_logistic_only or false
+            settings.harvest_logistic_only = entity.tags.harvest_logistic_only or false
             settings.use_filter = entity.tags.use_filter or false
             settings.filter_invert = entity.tags.filter_invert or false
             settings.filters = (type(entity.tags.filters) == "table" and (function() local f = {}; for i=1,5 do f[i]=entity.tags.filters[i] end; return f end)()) or nil
@@ -950,6 +973,7 @@ local function on_built_event_handler(event)
             local settings = create_default_roboport_settings()
             settings.mode = event.tags.mode or 0
             settings.seed_logistic_only = event.tags.seed_logistic_only or false
+            settings.harvest_logistic_only = event.tags.harvest_logistic_only or false
             settings.use_filter = event.tags.use_filter or false
             settings.filter_invert = event.tags.filter_invert or false
             settings.filters = (type(event.tags.filters) == "table" and (function() local f = {}; for i=1,5 do f[i]=event.tags.filters[i] end; return f end)()) or nil
@@ -985,18 +1009,33 @@ local function on_built_event_handler(event)
 				write_file_log("[Event] Roboport built over ghost, copied settings", "unit=", entity.unit_number, "ghost_key=", ghost_key)
                 tdm.mark_dirty()
             else
-                local settings = create_default_roboport_settings()
-                settings.surface = entity.surface.name
-                settings.position = {x = entity.position.x, y = entity.position.y}
-                write_file_log("[Event] About to assign to storage", "unit_number=", entity.unit_number, "type=", type(entity.unit_number))
-                storage.agricultural_roboports[entity.unit_number] = settings
-                -- Verify assignment succeeded
-                local count_after = 0
-                for _ in pairs(storage.agricultural_roboports) do count_after = count_after + 1 end
-                local verify = storage.agricultural_roboports[entity.unit_number]
-                write_file_log("[Event] AFTER storage assignment", "entries=", count_after, "verified=", tostring(verify ~= nil))
-				write_file_log("[Event] Roboport built without tags and ghost", "unit=", entity.unit_number)
-                tdm.mark_dirty()
+                -- Check if this is an upgrade (quality replacement via upgrade planner)
+                local upgrade_key = string.format("upgrade_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
+                local upgrade_settings = storage.agricultural_roboports[upgrade_key]
+                if upgrade_settings ~= nil then
+                    -- Found upgrade settings - apply them to the new quality entity
+                    write_file_log("[Event] Found upgrade settings", "unit=", entity.unit_number, "upgrade_key=", upgrade_key)
+                    upgrade_settings.surface = entity.surface.name
+                    upgrade_settings.position = {x = entity.position.x, y = entity.position.y}
+                    storage.agricultural_roboports[entity.unit_number] = upgrade_settings
+                    storage.agricultural_roboports[upgrade_key] = nil -- Clean up temporary storage
+                    write_file_log("[Event] Roboport built via upgrade, copied settings", "unit=", entity.unit_number, "upgrade_key=", upgrade_key)
+                    tdm.mark_dirty()
+                else
+                    -- No tags, no ghost, no upgrade - create default settings
+                    local settings = create_default_roboport_settings()
+                    settings.surface = entity.surface.name
+                    settings.position = {x = entity.position.x, y = entity.position.y}
+                    write_file_log("[Event] About to assign to storage", "unit_number=", entity.unit_number, "type=", type(entity.unit_number))
+                    storage.agricultural_roboports[entity.unit_number] = settings
+                    -- Verify assignment succeeded
+                    local count_after = 0
+                    for _ in pairs(storage.agricultural_roboports) do count_after = count_after + 1 end
+                    local verify = storage.agricultural_roboports[entity.unit_number]
+                    write_file_log("[Event] AFTER storage assignment", "entries=", count_after, "verified=", tostring(verify ~= nil))
+				    write_file_log("[Event] Roboport built without tags and ghost", "unit=", entity.unit_number)
+                    tdm.mark_dirty()
+                end
             end
         end
         return
@@ -1020,12 +1059,21 @@ local function on_remove_agricultural_roboport(event)
             -- on_player_mined_entity or on_robot_mined_entity = intentional removal
             local is_death = (event.name == defines.events.on_entity_died)
             
+            -- Check if entity is marked for upgrade (quality upgrade via upgrade planner)
+            local is_marked_for_upgrade = entity.to_be_upgraded()
+            
             if is_death then
                 -- Entity died (not deconstructed) - it will likely be auto-ghosted
                 -- Convert settings to ghost_key format so they can be retrieved when revived
                 local ghost_key = string.format("ghost_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
                 storage.agricultural_roboports[ghost_key] = settings
                 write_file_log("[Event] Roboport died, saved settings for ghost revival", "unit=", entity.unit_number, "ghost_key=", ghost_key)
+            elseif is_marked_for_upgrade then
+                -- Entity is being deconstructed as part of upgrade planner
+                -- Store settings temporarily for the upgraded entity
+                local upgrade_key = string.format("upgrade_%d_%d_%s", entity.position.x, entity.position.y, entity.surface.name)
+                storage.agricultural_roboports[upgrade_key] = settings
+                write_file_log("[Event] Roboport marked for upgrade, stored temporary settings", "unit=", entity.unit_number, "upgrade_key=", upgrade_key)
             else
                 -- Entity was mined/deconstructed intentionally - don't preserve settings
                 write_file_log("[Event] Roboport mined/deconstructed", "unit=", entity.unit_number)
@@ -1062,6 +1110,21 @@ local function on_entity_settings_pasted(event)
     end
 end
 
+-- Handle quality replacement (fast-replace with different quality)
+local function on_entity_cloned(event)
+    local source = event.source
+    local destination = event.destination
+    if source and destination and source.valid and destination.valid then
+        -- Check if this is an agricultural roboport being replaced
+        if source.name == "agricultural-roboport" and destination.name == "agricultural-roboport" then
+            local source_key = source.unit_number
+            local dest_key = destination.unit_number
+            write_file_log("[Event] Entity cloned (quality replacement)", "source=", tostring(source_key), "dest=", tostring(dest_key))
+            copy_roboport_settings(source_key, dest_key)
+        end
+    end
+end
+
 local function on_player_setup_blueprint(event)
     local player = game.get_player(event.player_index)
     local bp
@@ -1080,12 +1143,20 @@ local function on_player_setup_blueprint(event)
     for i, ent in ipairs(entities) do
         if ent.name == "agricultural-roboport" then
             local surface = player.surface
-            local real = surface.find_entity("agricultural-roboport", ent.position)
+            -- Search for agricultural roboports near the blueprint position (handles any precision issues)
+            local candidates = surface.find_entities_filtered{
+                name = "agricultural-roboport",
+                position = ent.position,
+                radius = 0.5
+            }
+            local real = candidates and candidates[1]
+            write_file_log("[Blueprint] Setup for entity", "bp_pos=", serpent and serpent.line(ent.position) or tostring(ent.position), "found=", tostring(real ~= nil))
             if real then
                 local settings = storage.agricultural_roboports[real.unit_number] or {}
                 local tags = {
                     mode = settings.mode or 0,
                     seed_logistic_only = settings.seed_logistic_only or false,
+                    harvest_logistic_only = settings.harvest_logistic_only or false,
                     use_filter = settings.use_filter or false,
                     filter_invert = settings.filter_invert or false,
                     circuit_mode_enabled = settings.circuit_mode_enabled or false,
@@ -1099,13 +1170,26 @@ local function on_player_setup_blueprint(event)
                 bp.set_blueprint_entity_tags(i, tags)
             else
                 -- Check for ghost at this position
-                local ghost = surface.find_entity("entity-ghost", ent.position)
-                if ghost and ghost.ghost_name == "agricultural-roboport" then
+                local ghost_candidates = surface.find_entities_filtered{
+                    name = "entity-ghost",
+                    position = ent.position,
+                    radius = 0.5
+                }
+                local ghost = nil
+                for _, candidate in ipairs(ghost_candidates or {}) do
+                    if candidate.ghost_name == "agricultural-roboport" then
+                        ghost = candidate
+                        break
+                    end
+                end
+                write_file_log("[Blueprint] Setup for ghost", "bp_pos=", serpent and serpent.line(ent.position) or tostring(ent.position), "found=", tostring(ghost ~= nil))
+                if ghost then
                     local ghost_key = string.format("ghost_%d_%d_%s", ghost.position.x, ghost.position.y, ghost.surface.name)
                     local settings = storage.agricultural_roboports[ghost_key] or {}
                     local tags = {
                         mode = settings.mode or 0,
                         seed_logistic_only = settings.seed_logistic_only or false,
+                        harvest_logistic_only = settings.harvest_logistic_only or false,
                         use_filter = settings.use_filter or false,
                         filter_invert = settings.filter_invert or false,
                         circuit_mode_enabled = settings.circuit_mode_enabled or false,
@@ -1271,6 +1355,7 @@ event_subscriptions.register_all({
         on_robot_built_entity = on_robot_built_entity_dispatch,
         on_entity_removed = on_entity_removed_dispatch,
         on_entity_settings_pasted = on_entity_settings_pasted,
+        on_entity_cloned = on_entity_cloned,
         on_player_setup_blueprint = on_player_setup_blueprint,
         on_tower_planted_seed = function(event)
             if event and event.plant and event.seed then

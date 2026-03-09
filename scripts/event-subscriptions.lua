@@ -44,6 +44,12 @@ function event_subscriptions.register_all(handlers)
         end
     end)
 
+    script.on_event(defines.events.on_entity_cloned, function(event)
+        if handlers.roboport and handlers.roboport.on_entity_cloned then
+            handlers.roboport.on_entity_cloned(event)
+        end
+    end)
+
     script.on_event(defines.events.on_player_setup_blueprint, function(event)
         if handlers.roboport and handlers.roboport.on_player_setup_blueprint then
             handlers.roboport.on_player_setup_blueprint(event)

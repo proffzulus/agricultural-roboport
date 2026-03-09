@@ -554,9 +554,14 @@ end
 function harvest(roboport, current_tick)
     local rsettings = storage.agricultural_roboports[roboport.unit_number] or {}
     if write_file_log then write_file_log("harvest:start", roboport.unit_number, current_tick) end
+    
+    -- Use logistic radius if harvest_logistic_only is enabled, otherwise use construction radius
+    local harvest_logistic_only = rsettings.harvest_logistic_only or false
+    local harvest_radius = harvest_logistic_only and roboport.logistic_cell.logistic_radius or roboport.logistic_cell.construction_radius
+    
     local area = {
-        {roboport.position.x - roboport.logistic_cell.construction_radius, roboport.position.y - roboport.logistic_cell.construction_radius},
-        {roboport.position.x + roboport.logistic_cell.construction_radius, roboport.position.y + roboport.logistic_cell.construction_radius}
+        {roboport.position.x - harvest_radius, roboport.position.y - harvest_radius},
+        {roboport.position.x + harvest_radius, roboport.position.y + harvest_radius}
     }
     -- Build set of all plant entity names from valid seeds when available.
     local plant_names = {}
@@ -580,16 +585,20 @@ function harvest(roboport, current_tick)
     -- Ensure we have a precomputed grid of harvest positions (small cells) to scan incrementally
     rsettings.precomputed = rsettings.precomputed or {}
     local hpositions = rsettings.precomputed.harvest_positions
-    if not hpositions then
+    local stored_harvest_mode = rsettings.precomputed.harvest_logistic_only
+    
+    -- Regenerate harvest positions if mode changed or positions don't exist
+    if not hpositions or stored_harvest_mode ~= harvest_logistic_only then
         hpositions = {}
         local step_h = 3
-        local radius_h = roboport.logistic_cell.construction_radius
+        local radius_h = harvest_radius
         for x = math.ceil(roboport.position.x - radius_h + 2), math.floor(roboport.position.x + radius_h - 2), step_h do
             for y = math.ceil(roboport.position.y - radius_h + 2), math.floor(roboport.position.y + radius_h - 2), step_h do
                 table.insert(hpositions, {x = x, y = y})
             end
         end
         rsettings.precomputed.harvest_positions = hpositions
+        rsettings.precomputed.harvest_logistic_only = harvest_logistic_only
         rsettings.precomputed.next_harvest_index = 1
         storage.agricultural_roboports[roboport.unit_number] = rsettings
     end

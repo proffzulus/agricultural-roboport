@@ -396,6 +396,14 @@ function UI.on_gui_opened(event)
             caption = {"agricultural-roboport.seed-logistic-only"}
         }
         
+        local harvest_logistic_only = settings.harvest_logistic_only or false
+        frame.add{
+            type = "checkbox",
+            name = "agricultural_roboport_harvest_logistic_only_" .. tostring(unit_key),
+            state = harvest_logistic_only,
+            caption = {"agricultural-roboport.harvest-logistic-only"}
+        }
+        
         -- Check if wires are connected
         local has_wires = false
         if is_roboport and entity.get_control_behavior then
@@ -1480,6 +1488,22 @@ function UI.on_gui_checked_state_changed(event)
             end
             local settings = storage.agricultural_roboports[unit_key]
             settings.seed_logistic_only = element.state
+        end
+    -- Handle 'Harvest in logistic area only' checkbox
+    elseif element_name and element_name:find("^agricultural_roboport_harvest_logistic_only_") then
+        local unit_key = element_name:match("^agricultural_roboport_harvest_logistic_only_(.+)$")
+        if unit_key then
+            local num_key = tonumber(unit_key)
+            if num_key then unit_key = num_key end
+            if not storage.agricultural_roboports[unit_key] then
+                storage.agricultural_roboports[unit_key] = {mode=0,seed_logistic_only=false,harvest_logistic_only=false,use_filter=false,filter_invert=false,filters=nil}
+            end
+            local settings = storage.agricultural_roboports[unit_key]
+            settings.harvest_logistic_only = element.state
+            -- Invalidate precomputed harvest positions so they'll be regenerated with new radius
+            if settings.precomputed then
+                settings.precomputed.harvest_positions = nil
+            end
         end
     -- Handle 'Set mode of operation from circuit' checkbox
     elseif element_name and element_name:find("^agricultural_roboport_circuit_mode_enable_") then

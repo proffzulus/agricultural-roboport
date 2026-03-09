@@ -249,9 +249,11 @@ commands.add_command("agro-seed-info", "Show detailed plant info for the seed it
     -- Tile restrictions (autoplace)
     player.print("")
     player.print("=== Tile Restrictions ===")
-    local ok_ap, ap = pcall(function() return plant_proto.autoplace end)
-    if ok_ap and ap and ap.tile_restriction then
-        local restrictions = ap.tile_restriction
+    
+    -- First check autoplace_specification
+    local ok_spec, spec = pcall(function() return plant_proto.autoplace_specification end)
+    if ok_spec and spec and spec.tile_restriction then
+        local restrictions = spec.tile_restriction
         local tile_list = {}
         for _, tile in pairs(restrictions) do
             if type(tile) == "table" and tile.first then
@@ -261,12 +263,34 @@ commands.add_command("agro-seed-info", "Show detailed plant info for the seed it
             end
         end
         if #tile_list > 0 then
-            player.print("  Allowed tiles: " .. table.concat(tile_list, ", "))
+            player.print("  Allowed tiles (via autoplace_specification): " .. table.concat(tile_list, ", "))
         else
-            player.print("  [color=yellow]Empty tile restriction list[/color]")
+            player.print("  [color=yellow]Empty tile restriction list (autoplace_specification)[/color]")
         end
     else
-        player.print("  [color=green]No tile restrictions (can plant anywhere)[/color]")
+        -- Then check autoplace
+        local ok_ap, ap = pcall(function() return plant_proto.autoplace end)
+        player.print("  autoplace_specification check: ok=" .. tostring(ok_spec) .. " exists=" .. tostring(spec ~= nil) .. " has_tile_restriction=" .. tostring(spec and spec.tile_restriction ~= nil))
+        player.print("  autoplace check: ok=" .. tostring(ok_ap) .. " exists=" .. tostring(ap ~= nil) .. " has_tile_restriction=" .. tostring(ap and ap.tile_restriction ~= nil))
+        
+        if ok_ap and ap and ap.tile_restriction then
+            local restrictions = ap.tile_restriction
+            local tile_list = {}
+            for _, tile in pairs(restrictions) do
+                if type(tile) == "table" and tile.first then
+                    table.insert(tile_list, tile.first)
+                elseif type(tile) == "string" then
+                    table.insert(tile_list, tile)
+                end
+            end
+            if #tile_list > 0 then
+                player.print("  Allowed tiles (via autoplace): " .. table.concat(tile_list, ", "))
+            else
+                player.print("  [color=yellow]Empty tile restriction list (autoplace)[/color]")
+            end
+        else
+            player.print("  [color=green]No tile restrictions (can plant anywhere)[/color]")
+        end
     end
     
     -- Tile buildability rules

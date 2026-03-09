@@ -1,5 +1,22 @@
 
 ---------------------------------------------------------------------------------------------------
+Version: 1.4.6
+Date: 2026-03-08
+  Features:
+    - Added "Harvest in logistic area only" checkbox to restrict harvesting to the logistic radius
+  Bugfixes:
+    - Fixed plants with empty tile_buildability_rules not being placeable 
+    - Fixed virtual seeds not being placeable on special tiles like lava
+    - Fixed settings not being preserved in blueprints for quality roboports
+    - Fixed settings being lost when upgrading roboport quality via upgrade planner
+  Technical:
+    - Virtual seed entities now copy surface_conditions from their plants
+    - Harvest function respects harvest_logistic_only setting for area calculation
+    - Blueprint tag creation now uses radius search for better entity matching
+    - Upgrade planner now preserves settings via temporary storage during quality replacement
+ 
+
+---------------------------------------------------------------------------------------------------
 Version: 1.4.5
 Date: 2026-02-25
   Bugfixes:

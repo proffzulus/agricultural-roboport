@@ -61,20 +61,20 @@ for category_name, category_prototypes in pairs(data.raw) do
                 -- Configure placement and collision
                 base.placeable_by = {item = item_name, count = 1, quality = "any"}
                 
+                -- Get plant prototype to copy collision properties (needed for special tiles like lava)
+                local plant_name = item_proto.plant_result
+                local plant_proto = nil
+                
+                -- Search for plant entity in data.raw
+                for entity_type, entities in pairs(data.raw) do
+                    if entities[plant_name] then
+                        plant_proto = entities[plant_name]
+                        break
+                    end
+                end
+                
                 -- In dense mode, use actual plant collision boxes; otherwise use default 3x3
                 if dense_mode then
-                    -- Get the plant entity to copy its collision boxes
-                    local plant_name = item_proto.plant_result
-                    local plant_proto = nil
-                    
-                    -- Search for plant entity in data.raw
-                    for entity_type, entities in pairs(data.raw) do
-                        if entities[plant_name] then
-                            plant_proto = entities[plant_name]
-                            break
-                        end
-                    end
-                    
                     if plant_proto then
                         -- For dense mode, use actual collision_box (red box) from the plant
                         -- This is what the game uses for placement validation
@@ -87,12 +87,6 @@ for category_name, category_prototypes in pairs(data.raw) do
                         -- Calculate tile dimensions from collision box
                         base.tile_width = math.max(1, math.ceil(coll_box[2][1] - coll_box[1][1]))
                         base.tile_height = math.max(1, math.ceil(coll_box[2][2] - coll_box[1][2]))
-                        
-                        -- Copy collision_mask from plant to match its collision behavior exactly
-                        if plant_proto.collision_mask then
-                            base.collision_mask = util.table.deepcopy(plant_proto.collision_mask)
-                            log("[Agricultural Roboport] Dense mode: Copied collision_mask from plant for " .. virtual_name)
-                        end
                         
                         -- Enable placeable-off-grid for dense packing
                         base.flags = base.flags or {}
@@ -117,12 +111,29 @@ for category_name, category_prototypes in pairs(data.raw) do
                     base.selection_box = {{-0.9, -0.9}, {0.9, 0.9}}
                 end
                 
-                base.minable = {mining_time = 0.1, result = nil}
-                base.inventory_size = 0
-                -- Set default collision_mask only if not already set in dense mode
-                if not base.collision_mask then
+                -- ALWAYS copy collision_mask from plant (regardless of dense mode)
+                -- This is critical for plants that grow on special tiles (lava, space, etc.)
+                if plant_proto and plant_proto.collision_mask then
+                    base.collision_mask = util.table.deepcopy(plant_proto.collision_mask)
+                    log("[Agricultural Roboport] Copied collision_mask from plant for " .. virtual_name .. " to allow placement on special tiles")
+                else
+                    -- Fallback collision_mask if plant not found or has no collision_mask
                     base.collision_mask = {layers={object=true, train=true, is_object=true, is_lower_object=true}}
                 end
+                
+                -- ALWAYS copy surface_conditions from plant (for lava, space platforms, etc.)
+                -- This overrides wooden-chest's default surface conditions
+                if plant_proto and plant_proto.surface_conditions then
+                    base.surface_conditions = util.table.deepcopy(plant_proto.surface_conditions)
+                    log("[Agricultural Roboport] Copied surface_conditions from plant for " .. virtual_name)
+                else
+                    -- Clear any restrictive surface_conditions from wooden-chest base
+                    base.surface_conditions = nil
+                    log("[Agricultural Roboport] Cleared surface_conditions for " .. virtual_name .. " (plant has none)")
+                end
+                
+                base.minable = {mining_time = 0.1, result = nil}
+                base.inventory_size = 0
                 
                 table.insert(virtual_seeds, base)
                 seed_count = seed_count + 1
